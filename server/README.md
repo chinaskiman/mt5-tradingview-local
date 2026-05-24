@@ -51,17 +51,18 @@ Both scripts run `node server.js`.
   "candles": [
     {
       "time": 1710000000,
-      "open": 1.09,
-      "high": 1.091,
-      "low": 1.089,
-      "close": 1.0905,
-      "smaFast": 1.0902,
+      "open": 1.09000,
+      "high": 1.09100,
+      "low": 1.08900,
+      "close": 1.09050,
+      "smaFast": 1.09020,
       "smaMid": null,
       "smaSlow": null,
       "atr": 0.0012,
       "adx": 24.5,
       "diPlus": 18.1,
-      "diMinus": 14.9
+      "diMinus": 14.9,
+      "rsi": 52.34567
     }
   ]
 }

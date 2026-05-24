@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 const PORT = 3001;
 const HOST = '127.0.0.1';
 const HEARTBEAT_MS = 30000;
-const INDICATOR_FIELDS = ['smaFast', 'smaMid', 'smaSlow', 'atr', 'adx', 'diPlus', 'diMinus'];
+const INDICATOR_FIELDS = ['smaFast', 'smaMid', 'smaSlow', 'atr', 'adx', 'diPlus', 'diMinus', 'rsi'];
 
 const app = express();
 const server = http.createServer(app);

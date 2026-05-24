@@ -33,6 +33,12 @@ input bool EnableADX     = true;
 input int  ADXLength     = 14;
 input bool EnableDI      = true;
 input int  DILength      = 14;
+input bool EnableRSI     = true;
+input int  RSILength     = 14;
+
+const string STATUS_LABEL_PREFIX = "MT5_Dashboard_Bridge_Status_";
+const string LEGACY_STATUS_LABEL_NAME = "MT5_Dashboard_Bridge_Status";
+const int JSON_DECIMALS = 5;
 
 int smaFastHandle = INVALID_HANDLE;
 int smaMidHandle  = INVALID_HANDLE;
@@ -40,30 +46,40 @@ int smaSlowHandle = INVALID_HANDLE;
 int atrHandle     = INVALID_HANDLE;
 int adxHandle     = INVALID_HANDLE;
 int diHandle      = INVALID_HANDLE;
+int rsiHandle     = INVALID_HANDLE;
 
 datetime lastAttemptedClosedTime = 0;
 bool sendOnStartup = true;
 
 int OnInit()
 {
+   CreateStatusLabel();
+   UpdateStatusLabel("Attached. Initializing...", clrDodgerBlue);
+
    if(HistoryBars < 1)
    {
       Print("HistoryBars must be greater than 0.");
+      UpdateStatusLabel("Input error: HistoryBars must be greater than 0", clrTomato);
       return(INIT_PARAMETERS_INCORRECT);
    }
 
    if(UpdateSeconds < 1)
    {
       Print("UpdateSeconds must be greater than 0.");
+      UpdateStatusLabel("Input error: UpdateSeconds must be greater than 0", clrTomato);
       return(INIT_PARAMETERS_INCORRECT);
    }
 
    if(!CreateIndicatorHandles())
+   {
+      UpdateStatusLabel("Indicator handle error. Check Experts tab.", clrTomato);
       return(INIT_FAILED);
+   }
 
    EventSetTimer(UpdateSeconds);
    Print("MT5 Dashboard Bridge attached to ", _Symbol, " ", TimeframeToString(_Period));
    Print("Dashboard mirrors this chart only. Endpoint: ", ServerUrl);
+   UpdateStatusLabel("Attached to " + _Symbol + " " + TimeframeToString(_Period) + ". Waiting for closed candle...", clrDodgerBlue);
 
    SendIfNeeded();
    return(INIT_SUCCEEDED);
@@ -73,6 +89,7 @@ void OnDeinit(const int reason)
 {
    EventKillTimer();
    ReleaseIndicatorHandles();
+   DeleteStatusLabels();
    Print("MT5 Dashboard Bridge removed. Reason: ", reason);
 }
 
@@ -130,6 +147,13 @@ bool CreateIndicatorHandles()
          return PrintHandleError("DI", DILength);
    }
 
+   if(EnableRSI)
+   {
+      rsiHandle = iRSI(_Symbol, _Period, RSILength, PRICE_CLOSE);
+      if(rsiHandle == INVALID_HANDLE)
+         return PrintHandleError("RSI", RSILength);
+   }
+
    return true;
 }
 
@@ -147,6 +171,7 @@ void ReleaseIndicatorHandles()
    if(atrHandle     != INVALID_HANDLE) IndicatorRelease(atrHandle);
    if(adxHandle     != INVALID_HANDLE) IndicatorRelease(adxHandle);
    if(diHandle      != INVALID_HANDLE) IndicatorRelease(diHandle);
+   if(rsiHandle     != INVALID_HANDLE) IndicatorRelease(rsiHandle);
 }
 
 void SendIfNeeded()
@@ -155,6 +180,7 @@ void SendIfNeeded()
    if(newestClosedTime <= 0)
    {
       Print("No closed candle is available yet for ", _Symbol, " ", TimeframeToString(_Period));
+      UpdateStatusLabel("No closed candle available yet", clrOrange);
       return;
    }
 
@@ -163,9 +189,14 @@ void SendIfNeeded()
 
    string payload = BuildSnapshotJson(newestClosedTime);
    if(payload == "")
+   {
+      UpdateStatusLabel("Snapshot build failed. Check Experts tab.", clrTomato);
+      return;
+   }
+
+   if(!SendJson(payload, newestClosedTime))
       return;
 
-   SendJson(payload);
    lastAttemptedClosedTime = newestClosedTime;
    sendOnStartup = false;
 }
@@ -180,6 +211,7 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    if(copiedRates <= 0)
    {
       Print("CopyRates failed or returned no closed bars. Error: ", GetLastError());
+      UpdateStatusLabel("CopyRates failed. Check chart history.", clrTomato);
       return "";
    }
 
@@ -190,6 +222,7 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    double adxValues[];
    double diPlusValues[];
    double diMinusValues[];
+   double rsiValues[];
 
    int smaFastCopied = CopyEnabledBuffer(EnableSMAFast, smaFastHandle, 0, copiedRates, smaFastValues, "SMA fast");
    int smaMidCopied  = CopyEnabledBuffer(EnableSMAMid,  smaMidHandle,  0, copiedRates, smaMidValues,  "SMA mid");
@@ -198,6 +231,7 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    int adxCopied     = CopyEnabledBuffer(EnableADX,     adxHandle,     0, copiedRates, adxValues,     "ADX");
    int diPlusCopied  = CopyEnabledBuffer(EnableDI,      diHandle,      1, copiedRates, diPlusValues,  "DI+");
    int diMinusCopied = CopyEnabledBuffer(EnableDI,      diHandle,      2, copiedRates, diMinusValues, "DI-");
+   int rsiCopied     = CopyEnabledBuffer(EnableRSI,     rsiHandle,     0, copiedRates, rsiValues,     "RSI");
 
    string json = "{";
    json += "\"source\":\"mt5\",";
@@ -211,7 +245,8 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    json += "\"smaSlow\":{\"enabled\":" + JsonBool(EnableSMASlow) + ",\"length\":" + IntegerToString(SMASlowLength) + "},";
    json += "\"atr\":{\"enabled\":" + JsonBool(EnableATR) + ",\"length\":" + IntegerToString(ATRLength) + "},";
    json += "\"adx\":{\"enabled\":" + JsonBool(EnableADX) + ",\"length\":" + IntegerToString(ADXLength) + "},";
-   json += "\"di\":{\"enabled\":" + JsonBool(EnableDI) + ",\"length\":" + IntegerToString(DILength) + "}";
+   json += "\"di\":{\"enabled\":" + JsonBool(EnableDI) + ",\"length\":" + IntegerToString(DILength) + "},";
+   json += "\"rsi\":{\"enabled\":" + JsonBool(EnableRSI) + ",\"length\":" + IntegerToString(RSILength) + "}";
    json += "},";
    json += "\"candles\":[";
 
@@ -222,17 +257,18 @@ string BuildSnapshotJson(const datetime newestClosedTime)
 
       json += "{";
       json += "\"time\":" + IntegerToString((long)rates[i].time) + ",";
-      json += "\"open\":" + JsonNumber(rates[i].open, _Digits) + ",";
-      json += "\"high\":" + JsonNumber(rates[i].high, _Digits) + ",";
-      json += "\"low\":" + JsonNumber(rates[i].low, _Digits) + ",";
-      json += "\"close\":" + JsonNumber(rates[i].close, _Digits) + ",";
-      json += "\"smaFast\":" + JsonBufferNumber(EnableSMAFast, smaFastValues, smaFastCopied, i, _Digits) + ",";
-      json += "\"smaMid\":" + JsonBufferNumber(EnableSMAMid, smaMidValues, smaMidCopied, i, _Digits) + ",";
-      json += "\"smaSlow\":" + JsonBufferNumber(EnableSMASlow, smaSlowValues, smaSlowCopied, i, _Digits) + ",";
-      json += "\"atr\":" + JsonBufferNumber(EnableATR, atrValues, atrCopied, i, _Digits) + ",";
-      json += "\"adx\":" + JsonBufferNumber(EnableADX, adxValues, adxCopied, i, 4) + ",";
-      json += "\"diPlus\":" + JsonBufferNumber(EnableDI, diPlusValues, diPlusCopied, i, 4) + ",";
-      json += "\"diMinus\":" + JsonBufferNumber(EnableDI, diMinusValues, diMinusCopied, i, 4);
+      json += "\"open\":" + JsonNumber(rates[i].open, JSON_DECIMALS) + ",";
+      json += "\"high\":" + JsonNumber(rates[i].high, JSON_DECIMALS) + ",";
+      json += "\"low\":" + JsonNumber(rates[i].low, JSON_DECIMALS) + ",";
+      json += "\"close\":" + JsonNumber(rates[i].close, JSON_DECIMALS) + ",";
+      json += "\"smaFast\":" + JsonBufferNumber(EnableSMAFast, smaFastValues, smaFastCopied, i, JSON_DECIMALS) + ",";
+      json += "\"smaMid\":" + JsonBufferNumber(EnableSMAMid, smaMidValues, smaMidCopied, i, JSON_DECIMALS) + ",";
+      json += "\"smaSlow\":" + JsonBufferNumber(EnableSMASlow, smaSlowValues, smaSlowCopied, i, JSON_DECIMALS) + ",";
+      json += "\"atr\":" + JsonBufferNumber(EnableATR, atrValues, atrCopied, i, JSON_DECIMALS) + ",";
+      json += "\"adx\":" + JsonBufferNumber(EnableADX, adxValues, adxCopied, i, JSON_DECIMALS) + ",";
+      json += "\"diPlus\":" + JsonBufferNumber(EnableDI, diPlusValues, diPlusCopied, i, JSON_DECIMALS) + ",";
+      json += "\"diMinus\":" + JsonBufferNumber(EnableDI, diMinusValues, diMinusCopied, i, JSON_DECIMALS) + ",";
+      json += "\"rsi\":" + JsonBufferNumber(EnableRSI, rsiValues, rsiCopied, i, JSON_DECIMALS);
       json += "}";
    }
 
@@ -271,7 +307,7 @@ int CopyEnabledBuffer(const bool enabled,
    return copied;
 }
 
-void SendJson(const string payload)
+bool SendJson(const string payload, const datetime newestClosedTime)
 {
    char body[];
    int bodyLength = StringToCharArray(payload, body, 0, WHOLE_ARRAY, CP_UTF8);
@@ -288,17 +324,84 @@ void SendJson(const string payload)
    {
       int errorCode = GetLastError();
       Print("WebRequest failed. Error: ", errorCode, ". Allow http://127.0.0.1:3001 in MT5 Tools > Options > Expert Advisors > WebRequest URLs.");
-      return;
+      UpdateStatusLabel("WebRequest failed. Allow http://127.0.0.1:3001", clrTomato);
+      return false;
    }
 
    if(status < 200 || status >= 300)
    {
       string responseText = CharArrayToString(response, 0, -1, CP_UTF8);
       Print("Server returned HTTP ", status, ". Response: ", responseText);
-      return;
+      if(status == 1003)
+         UpdateStatusLabel("HTTP 1003. Start backend: cd server && npm start", clrTomato);
+      else
+         UpdateStatusLabel("Server returned HTTP " + IntegerToString(status), clrTomato);
+      return false;
    }
 
    Print("Sent ", _Symbol, " ", TimeframeToString(_Period), " snapshot. Payload bytes: ", ArraySize(body), ". HTTP: ", status);
+   UpdateStatusLabel("OK " + _Symbol + " " + TimeframeToString(_Period) + " sent " + TimeToString(newestClosedTime, TIME_DATE | TIME_MINUTES), clrLimeGreen);
+   return true;
+}
+
+void CreateStatusLabel()
+{
+   ObjectDelete(0, LEGACY_STATUS_LABEL_NAME);
+
+   for(int i = 0; i < 3; i++)
+   {
+      string name = StatusLabelName(i);
+      if(ObjectFind(0, name) >= 0)
+         ObjectDelete(0, name);
+
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 12);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 18 + (i * 15));
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+   }
+}
+
+void UpdateStatusLabel(const string message, const color textColor)
+{
+   if(ObjectFind(0, StatusLabelName(0)) < 0)
+      CreateStatusLabel();
+
+   SetStatusLine(0, "MT5 Dashboard Bridge", clrWhite);
+   SetStatusLine(1, ShortenStatusText(message, 78), textColor);
+   SetStatusLine(2, "Chart: " + _Symbol + " " + TimeframeToString(_Period) + " | mirrors this chart only", clrSilver);
+   ChartRedraw(0);
+}
+
+void SetStatusLine(const int line, const string text, const color textColor)
+{
+   string name = StatusLabelName(line);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
+}
+
+void DeleteStatusLabels()
+{
+   ObjectDelete(0, LEGACY_STATUS_LABEL_NAME);
+   for(int i = 0; i < 3; i++)
+      ObjectDelete(0, StatusLabelName(i));
+}
+
+string StatusLabelName(const int line)
+{
+   return STATUS_LABEL_PREFIX + IntegerToString(line);
+}
+
+string ShortenStatusText(const string text, const int maxLength)
+{
+   if(StringLen(text) <= maxLength)
+      return text;
+
+   return StringSubstr(text, 0, maxLength - 3) + "...";
 }
 
 string JsonBufferNumber(const bool enabled,

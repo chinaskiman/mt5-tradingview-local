@@ -8,7 +8,28 @@ const WS_URL = import.meta.env.VITE_DASHBOARD_WS_URL || 'ws://127.0.0.1:3001';
 const PREFS_KEY = 'mt5-dashboard-ui-preferences';
 const DEFAULT_PREFS = {
   settingsCollapsed: false,
-  chartSpacing: 6
+  chartSpacing: 6,
+  panelHeights: {
+    price: 420,
+    atr: 170,
+    adx: 190,
+    rsi: 170
+  },
+  visible: {
+    smaFast: true,
+    smaMid: true,
+    smaSlow: true,
+    atr: true,
+    adx: true,
+    diPlus: true,
+    diMinus: true,
+    rsi: true
+  },
+  collapsedPanels: {
+    atr: false,
+    adx: false,
+    rsi: false
+  }
 };
 
 export default function App() {
@@ -68,6 +89,39 @@ export default function App() {
     }));
   }
 
+  function updateVisibility(key, value) {
+    setUiPrefs((current) => ({
+      ...current,
+      visible: {
+        ...DEFAULT_PREFS.visible,
+        ...current.visible,
+        [key]: value
+      }
+    }));
+  }
+
+  function togglePanelCollapsed(panelId) {
+    setUiPrefs((current) => ({
+      ...current,
+      collapsedPanels: {
+        ...DEFAULT_PREFS.collapsedPanels,
+        ...current.collapsedPanels,
+        [panelId]: !(current.collapsedPanels?.[panelId] ?? DEFAULT_PREFS.collapsedPanels[panelId])
+      }
+    }));
+  }
+
+  function updatePanelHeight(panelId, height) {
+    setUiPrefs((current) => ({
+      ...current,
+      panelHeights: {
+        ...DEFAULT_PREFS.panelHeights,
+        ...current.panelHeights,
+        [panelId]: height
+      }
+    }));
+  }
+
   return (
     <main className="app-shell">
       <StatusBar
@@ -89,13 +143,23 @@ export default function App() {
       ) : null}
 
       <section className="workspace">
-        <TradingDashboard snapshot={snapshot} chartSpacing={uiPrefs.chartSpacing} />
+        <TradingDashboard
+          snapshot={snapshot}
+          chartSpacing={uiPrefs.chartSpacing}
+          visible={uiPrefs.visible}
+          collapsedPanels={uiPrefs.collapsedPanels}
+          panelHeights={uiPrefs.panelHeights}
+          onTogglePanelCollapsed={togglePanelCollapsed}
+          onPanelHeightChange={updatePanelHeight}
+        />
         <IndicatorSettings
           snapshot={snapshot}
           collapsed={uiPrefs.settingsCollapsed}
           chartSpacing={uiPrefs.chartSpacing}
+          visible={uiPrefs.visible}
           onToggleCollapsed={() => updatePreference('settingsCollapsed', !uiPrefs.settingsCollapsed)}
           onChartSpacingChange={(value) => updatePreference('chartSpacing', value)}
+          onVisibilityChange={updateVisibility}
         />
       </section>
     </main>
@@ -109,16 +173,34 @@ function loadPreferences() {
     return {
       ...DEFAULT_PREFS,
       ...parsed,
-      chartSpacing: clamp(Number(parsed?.chartSpacing), 3, 14)
+      chartSpacing: clamp(Number(parsed?.chartSpacing), 3, 14),
+      panelHeights: normalizePanelHeights(parsed?.panelHeights),
+      visible: {
+        ...DEFAULT_PREFS.visible,
+        ...parsed?.visible
+      },
+      collapsedPanels: {
+        ...DEFAULT_PREFS.collapsedPanels,
+        ...parsed?.collapsedPanels
+      }
     };
   } catch {
     return DEFAULT_PREFS;
   }
 }
 
-function clamp(value, min, max) {
+function normalizePanelHeights(value) {
+  return {
+    price: clamp(Number(value?.price), 260, 900, DEFAULT_PREFS.panelHeights.price),
+    atr: clamp(Number(value?.atr), 80, 520, DEFAULT_PREFS.panelHeights.atr),
+    adx: clamp(Number(value?.adx), 90, 560, DEFAULT_PREFS.panelHeights.adx),
+    rsi: clamp(Number(value?.rsi), 80, 520, DEFAULT_PREFS.panelHeights.rsi)
+  };
+}
+
+function clamp(value, min, max, fallback = DEFAULT_PREFS.chartSpacing) {
   if (!Number.isFinite(value)) {
-    return DEFAULT_PREFS.chartSpacing;
+    return fallback;
   }
 
   return Math.min(max, Math.max(min, value));

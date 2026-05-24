@@ -103,3 +103,67 @@
 - Result: Initial commit `e8e923d` pushed successfully and local `main` now tracks `origin/main`.
 - Known issues: None for Git sync. `node_modules/` remains local and ignored.
 - Next steps: Push this project-log sync entry.
+
+## 2026-05-24 - Added MT5 chart attachment status label
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `PROJECT_LOG.md`
+- What changed: Added an `OBJ_LABEL` status badge in the upper-left of the MT5 chart when the EA is attached. The label shows initialization, attached chart, send success, WebRequest errors, server HTTP errors, and snapshot/history failures. The label is removed when the EA is detached.
+- Why: Make it visually obvious in MT5 that `MT5_Dashboard_Bridge.mq5` is attached to the current chart and whether it is sending data.
+- Tests/checks run: MetaEditor command-line compile after copying the EA into the local MT5 `MQL5/Experts` folder.
+- Result: EA compiled with 0 errors and 0 warnings.
+- Known issues: Visual label placement has not yet been checked manually on a live chart.
+- Next steps: Recompile/reload the EA in MT5, attach it to a chart, and confirm the label appears in the upper-left chart corner.
+
+## 2026-05-24 - Fixed MT5 status label wrapping and HTTP 1003 hint
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `PROJECT_LOG.md`
+- What changed: Replaced the single multiline MT5 chart label with three separate `OBJ_LABEL` lines so MT5 does not flatten the text. Added a shorter HTTP 1003 status message telling the user to start the backend.
+- Why: The chart rendered multiline label text as one long line, making the attachment/error status hard to read.
+- Tests/checks run: MetaEditor command-line compile after copying the EA into the local MT5 `MQL5/Experts` folder; checked `http://127.0.0.1:3001/health`.
+- Result: EA compiled with 0 errors and 0 warnings. Backend health check timed out, so the local server was not reachable at the time of diagnosis.
+- Known issues: The EA needs to be reloaded in MT5 to show the improved label. The backend must be running before MT5 can post snapshots successfully.
+- Next steps: Start the backend with `cd server && npm start`, then reattach or restart the EA.
+
+## 2026-05-24 - Added RSI, 5-decimal display, fullscreen panels, and local indicator toggles
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `server/server.js`, `server/README.md`, `README.md`, `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/components/IndicatorSettings.jsx`, `web/src/styles.css`, `PROJECT_LOG.md`
+- What changed: Added MT5-calculated RSI 14 with EA inputs and JSON payload support; changed EA numeric output and frontend chart price formatting to 5 decimals; added an RSI panel; added per-panel fullscreen controls; added local browser hide/show toggles for SMA, ATR, ADX, DI+, DI-, and RSI.
+- Why: The dashboard needs RSI from MT5, clearer numeric precision, expandable chart sections, and user-controlled display visibility without changing V1's MT5-owned indicator calculations.
+- Decisions: Browser toggles are local display preferences saved in `localStorage`; they do not send settings to MT5 or stop MT5 calculations. EA inputs remain the source of enabled/disabled indicator state.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`; temporary `node server.js` health check; MetaEditor command-line compile after copying the EA into the local MT5 `MQL5\Experts` folder; `git diff --check`.
+- Result: Backend syntax check passed. Web production build passed. Temporary backend health check returned OK. EA compiled with 0 errors and 0 warnings. Diff check found no whitespace errors, only expected CRLF conversion warnings.
+- Known issues: Live MT5-to-browser verification of the new RSI panel, fullscreen buttons, and local visibility toggles still needs to be done on the running dashboard.
+- Next steps: Restart/recompile the EA in MT5, start backend/frontend, attach the EA, then confirm RSI values appear and each panel's `Full`/`Exit` and visibility toggles work as expected.
+
+## 2026-05-24 - Added collapsible oscillator panels with latest values
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added saved frontend collapse state for ATR, ADX/DI, and RSI panels. Collapsed panels become compact rows showing the latest MT5-sent values to 5 decimals while keeping the full chart available through `Expand`.
+- Why: Sometimes the dashboard only needs the current oscillator number, such as ATR, without dedicating full vertical space to the oscillator chart.
+- Decisions: Collapse is separate from hide/show. Hiding removes the panel; collapsing keeps the latest value visible. The browser still does not calculate indicators or send indicator setting changes to MT5.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser check with live MT5 data is still needed to confirm the collapsed rows display the expected latest values during updates.
+- Next steps: Start backend/frontend, attach or restart the EA, then collapse ATR/ADX/RSI panels and confirm the compact values update with each MT5 snapshot.
+
+## 2026-05-24 - Added draggable chart panel heights
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added browser-saved panel height preferences and bottom-edge drag handles for expanded chart panels, including price, ATR, ADX/DI, and RSI.
+- Why: The dashboard needs adjustable vertical space so a user can emphasize the price chart or specific oscillator panels without changing MT5 data or calculations.
+- Decisions: Resizing is frontend-only and stored in `localStorage`. Collapsed panels keep their compact 44px row and are not draggable until expanded.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Pointer dragging still needs a manual browser check with the running Vite app.
+- Next steps: Start backend/frontend, then drag each expanded panel's bottom edge and confirm the saved heights persist after refresh.
+
+## 2026-05-24 - Kept chart controls off collapsed value rows
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Removed `Full` and `Collapse/Expand` buttons from collapsed oscillator value rows. Collapsed rows now show only the latest values and can be clicked or keyboard-expanded back into chart panels.
+- Why: Chart controls should sit on the expanded chart area, not on compact number-only rows.
+- Decisions: Fullscreen is available only from expanded chart panels. Compact rows are intentionally simple readouts.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser check is still needed to confirm compact ATR/ADX/RSI rows are clean and click-to-expand works with live data.
+- Next steps: Start backend/frontend, collapse each oscillator panel, confirm no chart control buttons appear on the compact value rows, then click rows to expand.

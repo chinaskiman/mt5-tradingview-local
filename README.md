@@ -17,7 +17,7 @@ V1 is deliberately narrow:
 MetaTrader 5 chart
   attached EA: mt5/MT5_Dashboard_Bridge.mq5
   uses _Symbol and _Period only
-  calculates SMA, ATR, ADX, DI+ and DI-
+  calculates SMA, ATR, ADX, DI+, DI- and RSI
   sends closed candles only
         |
         | HTTP POST http://127.0.0.1:3001/mt5/update
@@ -33,7 +33,7 @@ Node.js local bridge
 React browser dashboard
   web/src/*
   Vite app at http://127.0.0.1:5173
-  Lightweight Charts renders price, ATR, and ADX/DI panels
+  Lightweight Charts renders price, ATR, ADX/DI, and RSI panels
 ```
 
 ## Project Layout
@@ -165,6 +165,8 @@ The page auto-reconnects if the backend is unavailable or the WebSocket disconne
 
 The dashboard symbol and timeframe come from the attached chart. V1 intentionally has no browser-side symbol or timeframe picker.
 
+The MT5 EA inputs control which indicators are calculated. The browser settings panel can hide or show already-received chart layers locally, but it does not send indicator changes back to MT5 in V1. Oscillator panels can also be collapsed to a compact row that keeps the latest MT5-sent value visible; click a compact row to expand it again. Drag the bottom edge of an expanded chart panel to resize its height; panel heights are saved in the browser.
+
 ## Test with EURUSD M15
 
 1. Start backend:
@@ -190,9 +192,14 @@ npm run dev
 9. Scroll the price chart and confirm ATR and ADX/DI move with it.
 10. Scroll ATR and confirm price and ADX/DI move with it.
 11. Zoom the price chart and confirm oscillator panels stay aligned.
-12. Change EA inputs for indicator lengths.
-13. Reattach or restart the EA.
-14. Confirm the frontend receives the new settings and values.
+12. Confirm RSI values appear when RSI is enabled in the EA inputs.
+13. Click `Full` on each chart panel and confirm the panel expands and exits cleanly.
+14. Click `Collapse` on ATR, ADX/DI, and RSI panels and confirm the latest values remain visible without chart control buttons on the compact row.
+15. Drag the bottom edge of expanded panels and confirm each panel height changes.
+16. Use the browser indicator toggles to hide/show SMA, ATR, ADX, DI, and RSI layers.
+17. Change EA inputs for indicator lengths or enabled state.
+18. Reattach or restart the EA.
+19. Confirm the frontend receives the new settings and values.
 
 ## Troubleshooting
 
@@ -206,6 +213,9 @@ npm run dev
 
 - Dashboard mirrors only the chart where EA is attached.
 - Indicators are controlled from MT5 EA inputs, not the browser.
+- Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
+- Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.
+- Saved panel heights are browser-local UI preferences.
 - Only closed candles are displayed.
 - MT5 must be open and logged in.
 - Broker candle data may differ from TradingView.
