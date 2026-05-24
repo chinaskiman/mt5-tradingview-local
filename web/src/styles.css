@@ -1,0 +1,392 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0b0f14;
+  color: #d1d4dc;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  height: 100%;
+  min-height: 100vh;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: #0b0f14;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 100vh;
+  background: #0b0f14;
+}
+
+.status-bar {
+  display: grid;
+  grid-template-columns: 140px 130px 110px 90px minmax(190px, auto) minmax(180px, 1fr) minmax(150px, auto);
+  gap: 10px;
+  align-items: center;
+  min-height: 50px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #202b38;
+  background: #111722;
+}
+
+.status-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: #8f9bab;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status-value {
+  min-width: 0;
+  overflow: hidden;
+  color: #e5e7eb;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.connection-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #6b7280;
+}
+
+.connection-dot.connected {
+  background: #22c55e;
+}
+
+.connection-dot.connecting {
+  background: #f59e0b;
+}
+
+.connection-dot.disconnected,
+.connection-dot.error {
+  background: #ef4444;
+}
+
+.app-banner {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-bottom: 1px solid #202b38;
+  background: #151d28;
+  color: #b6bfca;
+  font-size: 13px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  background: #202b38;
+}
+
+.dashboard {
+  display: grid;
+  grid-template-rows: minmax(360px, 1fr) 170px 190px;
+  gap: 1px;
+  min-width: 0;
+  min-height: 0;
+  background: #202b38;
+}
+
+.chart-panel {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background: #0f141d;
+}
+
+.chart-title {
+  position: absolute;
+  z-index: 3;
+  top: 9px;
+  left: 11px;
+  display: flex;
+  max-width: calc(100% - 22px);
+  align-items: center;
+  gap: 9px;
+  color: #8f9bab;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.chart-title strong {
+  color: #d1d4dc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chart-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-host {
+  width: 100%;
+  height: 100%;
+}
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 20, 29, 0.72);
+  color: #8f9bab;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  overflow: auto;
+  padding: 14px;
+  background: #111722;
+}
+
+.settings-panel.is-collapsed {
+  width: 48px;
+  min-width: 48px;
+  overflow: hidden;
+  padding: 10px 8px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-panel h2,
+.settings-panel h3 {
+  margin: 0;
+  color: #e5e7eb;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-panel h3 {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.settings-panel.is-collapsed h2 {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #314154;
+  border-radius: 6px;
+  background: #151d28;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: #1b2532;
+}
+
+.settings-note {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #29384a;
+  border-radius: 6px;
+  background: #151d28;
+  color: #aab4c0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.indicator-list {
+  display: grid;
+  gap: 8px;
+}
+
+.indicator-row {
+  display: grid;
+  grid-template-columns: 10px minmax(80px, 1fr) minmax(84px, auto);
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 7px 8px;
+  border: 1px solid #253244;
+  border-radius: 6px;
+  background: #0f141d;
+  font-size: 12px;
+}
+
+.indicator-state {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #596474;
+}
+
+.indicator-state.enabled {
+  background: #22c55e;
+}
+
+.indicator-state.disabled {
+  background: #ef4444;
+}
+
+.indicator-name {
+  overflow: hidden;
+  color: #d1d4dc;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.indicator-meta {
+  color: #8f9bab;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.frontend-prefs {
+  display: grid;
+  gap: 10px;
+}
+
+.range-row {
+  display: grid;
+  grid-template-columns: minmax(78px, auto) minmax(90px, 1fr) 24px;
+  gap: 8px;
+  align-items: center;
+  color: #aab4c0;
+  font-size: 12px;
+}
+
+.range-row input {
+  min-width: 0;
+  accent-color: #38bdf8;
+}
+
+.range-value {
+  color: #e5e7eb;
+  text-align: right;
+}
+
+.snapshot-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px 12px;
+  margin: 0;
+  padding-top: 4px;
+  font-size: 12px;
+}
+
+.snapshot-details dt {
+  color: #7f8b9c;
+}
+
+.snapshot-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #d1d4dc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .status-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+@media (max-width: 900px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard {
+    min-height: 760px;
+  }
+
+  .settings-panel.is-collapsed {
+    width: auto;
+    min-width: 0;
+  }
+
+  .settings-panel.is-collapsed h2 {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .status-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard {
+    grid-template-rows: minmax(320px, 1fr) 150px 170px;
+  }
+
+  .chart-title {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
