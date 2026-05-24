@@ -93,3 +93,13 @@
 - Result: Server install/start works. Web install/dev/build works. EA compiles with 0 errors and 0 warnings. `node_modules/` is ignored; source files and lockfiles are commit-ready.
 - Known issues: Live end-to-end MT5 chart data has not been manually verified in the browser yet. `npm audit` endpoint was unreliable over the current network, but the final web install reported 0 vulnerabilities.
 - Next steps: Attach the EA to EURUSD M15 in MT5 and run the README manual testing checklist, especially chart panel scroll/zoom synchronization.
+
+## 2026-05-24 - Synced initial project to GitHub
+
+- Files changed: `PROJECT_LOG.md`
+- What changed: Committed the V1 project files and pushed branch `main` to `origin`.
+- Why: Publish the local repository to `https://github.com/chinaskiman/mt5-tradingview-local`.
+- Commands run: `git config --local user.name`, `git config --local user.email`, `git ls-remote origin`, `git add`, `git commit -m "Initial V1 MT5 TradingView local dashboard"`, `git push -u origin main`.
+- Result: Initial commit `e8e923d` pushed successfully and local `main` now tracks `origin/main`.
+- Known issues: None for Git sync. `node_modules/` remains local and ignored.
+- Next steps: Push this project-log sync entry.
