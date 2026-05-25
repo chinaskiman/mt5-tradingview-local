@@ -4,6 +4,8 @@ Local-only Express and WebSocket bridge between MetaTrader 5 and the browser das
 
 The server does not calculate indicators and does not modify indicator values. It validates MT5 snapshots, stores the latest valid snapshot in memory, and broadcasts that snapshot to connected browser clients.
 
+V3A also supports read-only trading monitor sections from MT5: `account`, `quote`, and `positions`. The server validates and relays those sections only. It does not calculate PnL, calculate lot size, place orders, close orders, or modify trades.
+
 ## Endpoints
 
 - `POST /mt5/update` receives the full MT5 chart snapshot.
@@ -13,8 +15,12 @@ The server does not calculate indicators and does not modify indicator values. I
 {
   "ok": true,
   "hasSnapshot": false,
+  "hasAccount": false,
+  "hasQuote": false,
+  "positionCount": 0,
   "clients": 0,
-  "lastUpdate": null
+  "lastUpdate": null,
+  "lastTradingUpdate": null
 }
 ```
 
@@ -47,6 +53,7 @@ Both scripts run `node server.js`.
   "timeframe": "M15",
   "timeframeSeconds": 900,
   "lastClosedTime": 1710000000,
+  "chartUpdated": true,
   "settings": {},
   "candles": [
     {
@@ -64,6 +71,50 @@ Both scripts run `node server.js`.
       "diMinus": 14.9,
       "rsi": 52.34567
     }
+  ],
+  "account": {
+    "login": 123456,
+    "server": "Broker-Server",
+    "currency": "USD",
+    "balance": 10000,
+    "equity": 10050.25,
+    "profit": 50.25,
+    "margin": 200,
+    "freeMargin": 9850.25,
+    "marginLevel": 5025.12,
+    "leverage": 100
+  },
+  "quote": {
+    "symbol": "EURUSD",
+    "bid": 1.08500,
+    "ask": 1.08512,
+    "spreadPoints": 12,
+    "digits": 5,
+    "point": 0.00001,
+    "tickSize": 0.00001,
+    "tickValue": 1,
+    "volumeMin": 0.01,
+    "volumeMax": 100,
+    "volumeStep": 0.01,
+    "contractSize": 100000
+  },
+  "positions": [
+    {
+      "ticket": 123456789,
+      "symbol": "EURUSD",
+      "type": "BUY",
+      "volume": 0.1,
+      "openPrice": 1.08000,
+      "sl": 1.07500,
+      "tp": 1.09000,
+      "currentPrice": 1.08500,
+      "profit": 50,
+      "swap": 0,
+      "commission": -0.5,
+      "openTime": 1710000000,
+      "magic": 0,
+      "comment": "manual"
+    }
   ]
 }
 ```
@@ -77,6 +128,37 @@ Required validation:
 - `candles` must be an array.
 - Every candle must have numeric `time`, `open`, `high`, `low`, and `close`.
 - Indicator fields may be numbers, `null`, or omitted.
+- Optional `account` must contain string `server` and `currency`, number `balance`, `equity`, `profit`, `margin`, and `freeMargin`, nullable number `marginLevel` and `leverage`, and number-or-string `login`.
+- Optional `quote` must contain string `symbol` and numeric bid/ask, spread, digits, point, tick size/value, volume limits, volume step, and contract size.
+- Optional `positions` must be an array. Empty arrays are valid. Each position uses `BUY` or `SELL`, number-or-string `ticket` and `magic`, string `symbol` and `comment`, numeric prices/PnL fields, and nullable numeric `sl` and `tp`.
+
+For monitor-only updates, MT5 may send `chartUpdated: false` without a `candles` array after the server already has a complete chart snapshot. The server merges the read-only monitor data into the latest stored chart snapshot and broadcasts the complete merged snapshot.
+
+## V3A Integration Checks
+
+Manual MT5 flow:
+
+1. Start the backend with `npm start`.
+2. Start the frontend from `web` with `npm run dev`.
+3. Open MT5 and attach the EA to `EURUSD` `M15`.
+4. Confirm `GET /health` reports `hasAccount: true`, `hasQuote: true`, and a `positionCount` number.
+5. Open a small demo position manually in MT5 and confirm `positionCount` updates.
+6. Confirm no backend routes exist for placing, closing, or modifying trades.
+
+Useful health response after V3A data is flowing:
+
+```json
+{
+  "ok": true,
+  "hasSnapshot": true,
+  "hasAccount": true,
+  "hasQuote": true,
+  "positionCount": 1,
+  "clients": 1,
+  "lastUpdate": "2026-05-25T12:00:00.000Z",
+  "lastTradingUpdate": "2026-05-25T12:00:00.000Z"
+}
+```
 
 ## WebSocket Behavior
 

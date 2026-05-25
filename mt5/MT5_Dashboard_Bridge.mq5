@@ -14,7 +14,9 @@
    4. Compile this EA and attach it to the chart you want to mirror.
 
    The web dashboard mirrors only the chart where this EA is attached.
-   V1 is view-only. This EA does not place, modify, or close trades.
+   V1/V3A is view/read-only. This EA does not place, modify, or close trades.
+   V3A only adds read-only account, quote, symbol property, and open position
+   monitor data to the local dashboard payload.
 */
 
 input int    HistoryBars   = 500;
@@ -184,10 +186,9 @@ void SendIfNeeded()
       return;
    }
 
-   if(!sendOnStartup && newestClosedTime == lastAttemptedClosedTime)
-      return;
+   bool chartUpdated = (sendOnStartup || newestClosedTime != lastAttemptedClosedTime);
 
-   string payload = BuildSnapshotJson(newestClosedTime);
+   string payload = BuildSnapshotJson(newestClosedTime, chartUpdated);
    if(payload == "")
    {
       UpdateStatusLabel("Snapshot build failed. Check Experts tab.", clrTomato);
@@ -197,23 +198,16 @@ void SendIfNeeded()
    if(!SendJson(payload, newestClosedTime))
       return;
 
-   lastAttemptedClosedTime = newestClosedTime;
+   if(chartUpdated)
+      lastAttemptedClosedTime = newestClosedTime;
+
    sendOnStartup = false;
 }
 
-string BuildSnapshotJson(const datetime newestClosedTime)
+string BuildSnapshotJson(const datetime newestClosedTime, const bool chartUpdated)
 {
-   int barsToCopy = MathMax(1, HistoryBars);
-
    MqlRates rates[];
-   ArraySetAsSeries(rates, true);
-   int copiedRates = CopyRates(_Symbol, _Period, 1, barsToCopy, rates);
-   if(copiedRates <= 0)
-   {
-      Print("CopyRates failed or returned no closed bars. Error: ", GetLastError());
-      UpdateStatusLabel("CopyRates failed. Check chart history.", clrTomato);
-      return "";
-   }
+   int copiedRates = 0;
 
    double smaFastValues[];
    double smaMidValues[];
@@ -224,14 +218,37 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    double diMinusValues[];
    double rsiValues[];
 
-   int smaFastCopied = CopyEnabledBuffer(EnableSMAFast, smaFastHandle, 0, copiedRates, smaFastValues, "SMA fast");
-   int smaMidCopied  = CopyEnabledBuffer(EnableSMAMid,  smaMidHandle,  0, copiedRates, smaMidValues,  "SMA mid");
-   int smaSlowCopied = CopyEnabledBuffer(EnableSMASlow, smaSlowHandle, 0, copiedRates, smaSlowValues, "SMA slow");
-   int atrCopied     = CopyEnabledBuffer(EnableATR,     atrHandle,     0, copiedRates, atrValues,     "ATR");
-   int adxCopied     = CopyEnabledBuffer(EnableADX,     adxHandle,     0, copiedRates, adxValues,     "ADX");
-   int diPlusCopied  = CopyEnabledBuffer(EnableDI,      diHandle,      1, copiedRates, diPlusValues,  "DI+");
-   int diMinusCopied = CopyEnabledBuffer(EnableDI,      diHandle,      2, copiedRates, diMinusValues, "DI-");
-   int rsiCopied     = CopyEnabledBuffer(EnableRSI,     rsiHandle,     0, copiedRates, rsiValues,     "RSI");
+   int smaFastCopied = 0;
+   int smaMidCopied  = 0;
+   int smaSlowCopied = 0;
+   int atrCopied     = 0;
+   int adxCopied     = 0;
+   int diPlusCopied  = 0;
+   int diMinusCopied = 0;
+   int rsiCopied     = 0;
+
+   if(chartUpdated)
+   {
+      int barsToCopy = MathMax(1, HistoryBars);
+
+      ArraySetAsSeries(rates, true);
+      copiedRates = CopyRates(_Symbol, _Period, 1, barsToCopy, rates);
+      if(copiedRates <= 0)
+      {
+         Print("CopyRates failed or returned no closed bars. Error: ", GetLastError());
+         UpdateStatusLabel("CopyRates failed. Check chart history.", clrTomato);
+         return "";
+      }
+
+      smaFastCopied = CopyEnabledBuffer(EnableSMAFast, smaFastHandle, 0, copiedRates, smaFastValues, "SMA fast");
+      smaMidCopied  = CopyEnabledBuffer(EnableSMAMid,  smaMidHandle,  0, copiedRates, smaMidValues,  "SMA mid");
+      smaSlowCopied = CopyEnabledBuffer(EnableSMASlow, smaSlowHandle, 0, copiedRates, smaSlowValues, "SMA slow");
+      atrCopied     = CopyEnabledBuffer(EnableATR,     atrHandle,     0, copiedRates, atrValues,     "ATR");
+      adxCopied     = CopyEnabledBuffer(EnableADX,     adxHandle,     0, copiedRates, adxValues,     "ADX");
+      diPlusCopied  = CopyEnabledBuffer(EnableDI,      diHandle,      1, copiedRates, diPlusValues,  "DI+");
+      diMinusCopied = CopyEnabledBuffer(EnableDI,      diHandle,      2, copiedRates, diMinusValues, "DI-");
+      rsiCopied     = CopyEnabledBuffer(EnableRSI,     rsiHandle,     0, copiedRates, rsiValues,     "RSI");
+   }
 
    string json = "{";
    json += "\"source\":\"mt5\",";
@@ -239,6 +256,7 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    json += "\"timeframe\":" + JsonString(TimeframeToString(_Period)) + ",";
    json += "\"timeframeSeconds\":" + IntegerToString(PeriodSeconds(_Period)) + ",";
    json += "\"lastClosedTime\":" + IntegerToString((long)newestClosedTime) + ",";
+   json += "\"chartUpdated\":" + JsonBool(chartUpdated) + ",";
    json += "\"settings\":{";
    json += "\"smaFast\":{\"enabled\":" + JsonBool(EnableSMAFast) + ",\"length\":" + IntegerToString(SMAFastLength) + "},";
    json += "\"smaMid\":{\"enabled\":" + JsonBool(EnableSMAMid) + ",\"length\":" + IntegerToString(SMAMidLength) + "},";
@@ -248,32 +266,138 @@ string BuildSnapshotJson(const datetime newestClosedTime)
    json += "\"di\":{\"enabled\":" + JsonBool(EnableDI) + ",\"length\":" + IntegerToString(DILength) + "},";
    json += "\"rsi\":{\"enabled\":" + JsonBool(EnableRSI) + ",\"length\":" + IntegerToString(RSILength) + "}";
    json += "},";
-   json += "\"candles\":[";
 
-   for(int i = copiedRates - 1; i >= 0; i--)
+   if(chartUpdated)
    {
-      if(i < copiedRates - 1)
-         json += ",";
+      json += "\"candles\":[";
 
-      json += "{";
-      json += "\"time\":" + IntegerToString((long)rates[i].time) + ",";
-      json += "\"open\":" + JsonNumber(rates[i].open, JSON_DECIMALS) + ",";
-      json += "\"high\":" + JsonNumber(rates[i].high, JSON_DECIMALS) + ",";
-      json += "\"low\":" + JsonNumber(rates[i].low, JSON_DECIMALS) + ",";
-      json += "\"close\":" + JsonNumber(rates[i].close, JSON_DECIMALS) + ",";
-      json += "\"smaFast\":" + JsonBufferNumber(EnableSMAFast, smaFastValues, smaFastCopied, i, JSON_DECIMALS) + ",";
-      json += "\"smaMid\":" + JsonBufferNumber(EnableSMAMid, smaMidValues, smaMidCopied, i, JSON_DECIMALS) + ",";
-      json += "\"smaSlow\":" + JsonBufferNumber(EnableSMASlow, smaSlowValues, smaSlowCopied, i, JSON_DECIMALS) + ",";
-      json += "\"atr\":" + JsonBufferNumber(EnableATR, atrValues, atrCopied, i, JSON_DECIMALS) + ",";
-      json += "\"adx\":" + JsonBufferNumber(EnableADX, adxValues, adxCopied, i, JSON_DECIMALS) + ",";
-      json += "\"diPlus\":" + JsonBufferNumber(EnableDI, diPlusValues, diPlusCopied, i, JSON_DECIMALS) + ",";
-      json += "\"diMinus\":" + JsonBufferNumber(EnableDI, diMinusValues, diMinusCopied, i, JSON_DECIMALS) + ",";
-      json += "\"rsi\":" + JsonBufferNumber(EnableRSI, rsiValues, rsiCopied, i, JSON_DECIMALS);
-      json += "}";
+      for(int i = copiedRates - 1; i >= 0; i--)
+      {
+         if(i < copiedRates - 1)
+            json += ",";
+
+         json += "{";
+         json += "\"time\":" + IntegerToString((long)rates[i].time) + ",";
+         json += "\"open\":" + JsonNumber(rates[i].open, JSON_DECIMALS) + ",";
+         json += "\"high\":" + JsonNumber(rates[i].high, JSON_DECIMALS) + ",";
+         json += "\"low\":" + JsonNumber(rates[i].low, JSON_DECIMALS) + ",";
+         json += "\"close\":" + JsonNumber(rates[i].close, JSON_DECIMALS) + ",";
+         json += "\"smaFast\":" + JsonBufferNumber(EnableSMAFast, smaFastValues, smaFastCopied, i, JSON_DECIMALS) + ",";
+         json += "\"smaMid\":" + JsonBufferNumber(EnableSMAMid, smaMidValues, smaMidCopied, i, JSON_DECIMALS) + ",";
+         json += "\"smaSlow\":" + JsonBufferNumber(EnableSMASlow, smaSlowValues, smaSlowCopied, i, JSON_DECIMALS) + ",";
+         json += "\"atr\":" + JsonBufferNumber(EnableATR, atrValues, atrCopied, i, JSON_DECIMALS) + ",";
+         json += "\"adx\":" + JsonBufferNumber(EnableADX, adxValues, adxCopied, i, JSON_DECIMALS) + ",";
+         json += "\"diPlus\":" + JsonBufferNumber(EnableDI, diPlusValues, diPlusCopied, i, JSON_DECIMALS) + ",";
+         json += "\"diMinus\":" + JsonBufferNumber(EnableDI, diMinusValues, diMinusCopied, i, JSON_DECIMALS) + ",";
+         json += "\"rsi\":" + JsonBufferNumber(EnableRSI, rsiValues, rsiCopied, i, JSON_DECIMALS);
+         json += "}";
+      }
+
+      json += "],";
    }
 
-   json += "]}";
+   json += "\"account\":" + BuildAccountJson() + ",";
+   json += "\"quote\":" + BuildQuoteJson() + ",";
+   json += "\"positions\":" + BuildPositionsJson();
+   json += "}";
    return json;
+}
+
+string BuildAccountJson()
+{
+   string json = "{";
+   json += "\"login\":" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + ",";
+   json += "\"server\":" + JsonString(AccountInfoString(ACCOUNT_SERVER)) + ",";
+   json += "\"currency\":" + JsonString(AccountInfoString(ACCOUNT_CURRENCY)) + ",";
+   json += "\"balance\":" + JsonNumber(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ",";
+   json += "\"equity\":" + JsonNumber(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
+   json += "\"profit\":" + JsonNumber(AccountInfoDouble(ACCOUNT_PROFIT), 2) + ",";
+   json += "\"margin\":" + JsonNumber(AccountInfoDouble(ACCOUNT_MARGIN), 2) + ",";
+   json += "\"freeMargin\":" + JsonNumber(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2) + ",";
+   json += "\"marginLevel\":" + JsonNumber(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2) + ",";
+   json += "\"leverage\":" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LEVERAGE));
+   json += "}";
+   return json;
+}
+
+string BuildQuoteJson()
+{
+   string json = "{";
+   json += "\"symbol\":" + JsonString(_Symbol) + ",";
+   json += "\"bid\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_BID), JSON_DECIMALS) + ",";
+   json += "\"ask\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_ASK), JSON_DECIMALS) + ",";
+   json += "\"spreadPoints\":" + IntegerToString((long)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD)) + ",";
+   json += "\"digits\":" + IntegerToString((long)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) + ",";
+   json += "\"point\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_POINT), 8) + ",";
+   json += "\"tickSize\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE), 8) + ",";
+   json += "\"tickValue\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE), 8) + ",";
+   json += "\"volumeMin\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN), 8) + ",";
+   json += "\"volumeMax\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), 8) + ",";
+   json += "\"volumeStep\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP), 8) + ",";
+   json += "\"contractSize\":" + JsonNumber(SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE), 2);
+   json += "}";
+   return json;
+}
+
+string BuildPositionsJson()
+{
+   string json = "[";
+   int emitted = 0;
+
+   // Read-only monitor data: this loop only reads open positions. It does not
+   // place, close, or modify trades.
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+      {
+         Print("PositionSelectByTicket failed for ticket ", ticket, ". Error: ", GetLastError());
+         continue;
+      }
+
+      if(emitted > 0)
+         json += ",";
+
+      long positionType = PositionGetInteger(POSITION_TYPE);
+
+      json += "{";
+      json += "\"ticket\":" + IntegerToString((long)ticket) + ",";
+      json += "\"symbol\":" + JsonString(PositionGetString(POSITION_SYMBOL)) + ",";
+      json += "\"type\":" + JsonString(PositionTypeToString(positionType)) + ",";
+      json += "\"volume\":" + JsonNumber(PositionGetDouble(POSITION_VOLUME), 8) + ",";
+      json += "\"openPrice\":" + JsonNumber(PositionGetDouble(POSITION_PRICE_OPEN), JSON_DECIMALS) + ",";
+      json += "\"sl\":" + JsonNumber(PositionGetDouble(POSITION_SL), JSON_DECIMALS) + ",";
+      json += "\"tp\":" + JsonNumber(PositionGetDouble(POSITION_TP), JSON_DECIMALS) + ",";
+      json += "\"currentPrice\":" + JsonNumber(PositionGetDouble(POSITION_PRICE_CURRENT), JSON_DECIMALS) + ",";
+      json += "\"profit\":" + JsonNumber(PositionGetDouble(POSITION_PROFIT), 2) + ",";
+      json += "\"swap\":" + JsonNumber(PositionGetDouble(POSITION_SWAP), 2) + ",";
+      // Some MT5 builds do not expose commission as a position property.
+      // Keep this read-only field stable and set it to 0 for compatibility.
+      json += "\"commission\":0,";
+      json += "\"openTime\":" + IntegerToString((long)PositionGetInteger(POSITION_TIME)) + ",";
+      json += "\"magic\":" + IntegerToString((long)PositionGetInteger(POSITION_MAGIC)) + ",";
+      json += "\"comment\":" + JsonString(PositionGetString(POSITION_COMMENT));
+      json += "}";
+
+      emitted++;
+   }
+
+   json += "]";
+   return json;
+}
+
+string PositionTypeToString(const long positionType)
+{
+   if(positionType == POSITION_TYPE_BUY)
+      return "BUY";
+
+   if(positionType == POSITION_TYPE_SELL)
+      return "SELL";
+
+   return "UNKNOWN";
 }
 
 int CopyEnabledBuffer(const bool enabled,

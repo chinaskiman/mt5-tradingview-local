@@ -13,6 +13,7 @@ const wss = new WebSocketServer({ server });
 
 let latestSnapshot = null;
 let lastUpdate = null;
+let lastTradingUpdate = null;
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -20,28 +21,40 @@ app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     hasSnapshot: Boolean(latestSnapshot),
+    hasAccount: Boolean(latestSnapshot?.account),
+    hasQuote: Boolean(latestSnapshot?.quote),
+    positionCount: Array.isArray(latestSnapshot?.positions) ? latestSnapshot.positions.length : 0,
     clients: getConnectedClientCount(),
-    lastUpdate
+    lastUpdate,
+    lastTradingUpdate
   });
 });
 
 app.post('/mt5/update', (req, res) => {
-  const validation = validateSnapshot(req.body);
+  const snapshot = normalizeSnapshot(req.body);
+  const validation = validateSnapshot(snapshot);
   if (!validation.ok) {
     console.warn(`Rejected MT5 update: ${validation.error}`);
     res.status(400).json({ ok: false, error: validation.error });
     return;
   }
 
-  latestSnapshot = req.body;
+  latestSnapshot = mergeSnapshot(snapshot);
   lastUpdate = new Date().toISOString();
+  if (hasTradingMonitorData(snapshot)) {
+    lastTradingUpdate = lastUpdate;
+  }
 
   const broadcastCount = broadcastSnapshot(latestSnapshot);
 
   console.log('MT5 update received');
   console.log(`  symbol/timeframe: ${latestSnapshot.symbol} ${latestSnapshot.timeframe}`);
+  console.log(`  chart updated: ${latestSnapshot.chartUpdated !== false}`);
   console.log(`  candles: ${latestSnapshot.candles.length}`);
   console.log(`  last closed candle time: ${latestSnapshot.lastClosedTime ?? 'not provided'}`);
+  console.log(`  account equity: ${formatOptionalNumber(latestSnapshot.account?.equity)}`);
+  console.log(`  quote: ${formatQuoteLog(latestSnapshot.quote)}`);
+  console.log(`  open positions: ${Array.isArray(latestSnapshot.positions) ? latestSnapshot.positions.length : 0}`);
   console.log(`  broadcast clients: ${broadcastCount}`);
 
   res.json({ ok: true, clients: getConnectedClientCount(), broadcastCount });
@@ -132,6 +145,31 @@ function validateSnapshot(payload) {
     return invalid('settings must be an object.');
   }
 
+  const accountValidation = validateAccount(payload.account);
+  if (!accountValidation.ok) {
+    return accountValidation;
+  }
+
+  const quoteValidation = validateQuote(payload.quote);
+  if (!quoteValidation.ok) {
+    return quoteValidation;
+  }
+
+  const positionsValidation = validatePositions(payload.positions);
+  if (!positionsValidation.ok) {
+    return positionsValidation;
+  }
+
+  const chartUpdated = payload.chartUpdated !== false;
+
+  if (!chartUpdated && !latestSnapshot) {
+    return invalid('chartUpdated false requires an existing chart snapshot.');
+  }
+
+  if (!chartUpdated && payload.candles === undefined) {
+    return { ok: true };
+  }
+
   if (!Array.isArray(payload.candles)) {
     return invalid('candles must be an array.');
   }
@@ -147,6 +185,194 @@ function validateSnapshot(payload) {
     if (!candleValidation.ok) {
       return candleValidation;
     }
+  }
+
+  return { ok: true };
+}
+
+function normalizeSnapshot(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const normalized = { ...payload };
+
+  if (Object.hasOwn(payload, 'account')) {
+    normalized.account = normalizeAccount(payload.account);
+  }
+
+  if (Object.hasOwn(payload, 'positions')) {
+    normalized.positions = normalizePositions(payload.positions);
+  }
+
+  return normalized;
+}
+
+function normalizeAccount(account) {
+  if (!account || typeof account !== 'object' || Array.isArray(account)) {
+    return account;
+  }
+
+  return {
+    ...account,
+    marginLevel: account.marginLevel ?? null,
+    leverage: account.leverage ?? null
+  };
+}
+
+function normalizePositions(positions) {
+  if (!Array.isArray(positions)) {
+    return positions;
+  }
+
+  return positions.map((position) => {
+    if (!position || typeof position !== 'object' || Array.isArray(position)) {
+      return position;
+    }
+
+    return {
+      ...position,
+      sl: position.sl ?? null,
+      tp: position.tp ?? null
+    };
+  });
+}
+
+function mergeSnapshot(payload) {
+  if (payload.chartUpdated === false && latestSnapshot) {
+    return {
+      ...latestSnapshot,
+      ...payload,
+      candles: latestSnapshot.candles,
+      settings: payload.settings || latestSnapshot.settings
+    };
+  }
+
+  return payload;
+}
+
+function validateAccount(account) {
+  if (account === undefined) {
+    return { ok: true };
+  }
+
+  if (!account || typeof account !== 'object' || Array.isArray(account)) {
+    return invalid('account must be an object when present.');
+  }
+
+  if (!isNumberOrString(account.login)) {
+    return invalid('account.login must be a number or string.');
+  }
+
+  for (const field of ['server', 'currency']) {
+    if (typeof account[field] !== 'string') {
+      return invalid(`account.${field} must be a string.`);
+    }
+  }
+
+  for (const field of ['balance', 'equity', 'profit', 'margin', 'freeMargin']) {
+    if (!Number.isFinite(account[field])) {
+      return invalid(`account.${field} must be a number.`);
+    }
+  }
+
+  for (const field of ['marginLevel', 'leverage']) {
+    if (account[field] !== null && !Number.isFinite(account[field])) {
+      return invalid(`account.${field} must be a number or null.`);
+    }
+  }
+
+  return { ok: true };
+}
+
+function validateQuote(quote) {
+  if (quote === undefined) {
+    return { ok: true };
+  }
+
+  if (!quote || typeof quote !== 'object' || Array.isArray(quote)) {
+    return invalid('quote must be an object when present.');
+  }
+
+  if (typeof quote.symbol !== 'string') {
+    return invalid('quote.symbol must be a string.');
+  }
+
+  for (const field of [
+    'bid',
+    'ask',
+    'spreadPoints',
+    'digits',
+    'point',
+    'tickSize',
+    'tickValue',
+    'volumeMin',
+    'volumeMax',
+    'volumeStep',
+    'contractSize'
+  ]) {
+    if (!Number.isFinite(quote[field])) {
+      return invalid(`quote.${field} must be a number.`);
+    }
+  }
+
+  return { ok: true };
+}
+
+function validatePositions(positions) {
+  if (positions === undefined) {
+    return { ok: true };
+  }
+
+  if (!Array.isArray(positions)) {
+    return invalid('positions must be an array when present.');
+  }
+
+  for (let index = 0; index < positions.length; index += 1) {
+    const validation = validatePosition(positions[index], index);
+    if (!validation.ok) {
+      return validation;
+    }
+  }
+
+  return { ok: true };
+}
+
+function validatePosition(position, index) {
+  if (!position || typeof position !== 'object' || Array.isArray(position)) {
+    return invalid(`positions[${index}] must be an object.`);
+  }
+
+  if (!isNumberOrString(position.ticket)) {
+    return invalid(`positions[${index}].ticket must be a number or string.`);
+  }
+
+  if (typeof position.symbol !== 'string') {
+    return invalid(`positions[${index}].symbol must be a string.`);
+  }
+
+  if (position.type !== 'BUY' && position.type !== 'SELL') {
+    return invalid(`positions[${index}].type must be BUY or SELL.`);
+  }
+
+  for (const field of ['volume', 'openPrice', 'currentPrice', 'profit', 'swap', 'commission', 'openTime']) {
+    if (!Number.isFinite(position[field])) {
+      return invalid(`positions[${index}].${field} must be a number.`);
+    }
+  }
+
+  for (const field of ['sl', 'tp']) {
+    if (position[field] !== null && !Number.isFinite(position[field])) {
+      return invalid(`positions[${index}].${field} must be a number or null.`);
+    }
+  }
+
+  if (!isNumberOrString(position.magic)) {
+    return invalid(`positions[${index}].magic must be a number or string.`);
+  }
+
+  if (typeof position.comment !== 'string') {
+    return invalid(`positions[${index}].comment must be a string.`);
   }
 
   return { ok: true };
@@ -206,6 +432,26 @@ function getConnectedClientCount() {
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isNumberOrString(value) {
+  return Number.isFinite(value) || typeof value === 'string';
+}
+
+function hasTradingMonitorData(snapshot) {
+  return Boolean(snapshot?.account || snapshot?.quote || snapshot?.positions);
+}
+
+function formatOptionalNumber(value) {
+  return Number.isFinite(value) ? value : 'not provided';
+}
+
+function formatQuoteLog(quote) {
+  if (!quote) {
+    return 'not provided';
+  }
+
+  return `${quote.symbol} bid=${quote.bid} ask=${quote.ask}`;
 }
 
 function invalid(error) {

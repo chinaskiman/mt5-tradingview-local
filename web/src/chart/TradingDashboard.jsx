@@ -382,6 +382,7 @@ export default function TradingDashboard({
   const isAdxCollapsed = Boolean(collapsedPanels?.adx);
   const isRsiCollapsed = Boolean(collapsedPanels?.rsi);
   const displayedValues = crosshairTime ? valuesAtTime(seriesData, crosshairTime) : seriesData.latest;
+  const showCrosshairReadouts = Boolean(crosshairTime);
   const panelLayout = resolvePanelLayout({
     panelHeights: draftPanelHeights || panelHeights,
     dashboardHeight,
@@ -412,6 +413,7 @@ export default function TradingDashboard({
           id="price"
           title="Price"
           subtitle={priceLegend(settings, visible, displayedValues)}
+          crosshairReadout={showCrosshairReadouts ? priceCrosshairReadout(displayedValues) : null}
           hostRef={priceRef}
           crosshairRef={priceCrosshairRef}
           isEmpty={!hasSnapshot || !seriesData.candles.length}
@@ -428,6 +430,7 @@ export default function TradingDashboard({
           id="atr"
           title="ATR"
           subtitle={indicatorLegend(settings.atr, 'ATR', displayedValues.atr)}
+          crosshairReadout={showCrosshairReadouts ? indicatorCrosshairReadout(settings.atr, 'ATR', displayedValues.atr, INDICATOR_COLORS.atr) : null}
           hostRef={atrRef}
           crosshairRef={atrCrosshairRef}
           hidden={!showAtrPanel}
@@ -448,6 +451,7 @@ export default function TradingDashboard({
           id="adx"
           title="ADX / DI"
           subtitle={diLegend(settings, visible, displayedValues)}
+          crosshairReadout={showCrosshairReadouts ? diLegend(settings, visible, displayedValues) : null}
           hostRef={adxRef}
           crosshairRef={adxCrosshairRef}
           hidden={!showAdxPanel}
@@ -465,6 +469,7 @@ export default function TradingDashboard({
           id="rsi"
           title="RSI"
           subtitle={indicatorLegend(settings.rsi, 'RSI', displayedValues.rsi)}
+          crosshairReadout={showCrosshairReadouts ? indicatorCrosshairReadout(settings.rsi, 'RSI', displayedValues.rsi, INDICATOR_COLORS.rsi) : null}
           hostRef={rsiRef}
           crosshairRef={rsiCrosshairRef}
           hidden={!showRsiPanel}
@@ -969,6 +974,7 @@ function ChartPanel({
   id,
   title,
   subtitle,
+  crosshairReadout,
   hostRef,
   crosshairRef,
   hidden,
@@ -1036,7 +1042,10 @@ function ChartPanel({
         </div>
       ) : null}
       <div ref={hostRef} className="chart-host" />
-      <div ref={crosshairRef} className="synced-crosshair-line" aria-hidden="true" />
+      <div ref={crosshairRef} className="synced-crosshair" aria-hidden="true">
+        <div className="synced-crosshair-line" />
+        {crosshairReadout ? <div className="synced-crosshair-readout">{crosshairReadout}</div> : null}
+      </div>
       {isEmpty && !collapsed ? <div className="empty-state">{emptyText}</div> : null}
     </div>
   );
@@ -1088,6 +1097,7 @@ function showCrosshairOverlay(entry, coordinate) {
 
   entry.crosshairElement.style.display = 'block';
   entry.crosshairElement.style.transform = `translateX(${Math.round(coordinate)}px)`;
+  entry.crosshairElement.classList.toggle('is-near-right', coordinate > width - 280);
 }
 
 function hideCrosshairOverlay(entry) {
@@ -1244,6 +1254,18 @@ function priceLegend(settings, visible, values) {
 
 function indicatorLegend(setting, label, value) {
   return isEnabled(setting) ? `${label} ${formatValue(value)}` : `${label} disabled in MT5`;
+}
+
+function priceCrosshairReadout(values) {
+  return <span>{`Close ${formatValue(values.close)}`}</span>;
+}
+
+function indicatorCrosshairReadout(setting, label, value, color) {
+  if (!isEnabled(setting)) {
+    return null;
+  }
+
+  return <span style={{ color }}>{`${label} ${formatValue(value)}`}</span>;
 }
 
 function diLegend(settings, visible, latest) {

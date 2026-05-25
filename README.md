@@ -2,13 +2,14 @@
 
 Local Windows dashboard that mirrors the currently open MetaTrader 5 chart in a TradingView-style browser UI.
 
-V1 is deliberately narrow:
+The dashboard scope is deliberately narrow:
 
 - Local-only: MT5, Node.js server, and browser run on the same Windows machine.
-- View-only: no order execution, no order modification, and no account access.
+- Read-only: no order execution, no order closing, and no order modification.
 - Chart-attached: the dashboard mirrors only the chart where `MT5_Dashboard_Bridge.mq5` is attached.
 - Closed candles only: the EA sends shift `1` and older candles, not the unfinished live candle.
 - MT5-calculated indicators only: the browser displays indicator values sent by MT5.
+- V3A monitor data is read-only: account summary, chart-symbol quote/properties, and open positions.
 - No frontend symbol/timeframe selector and no volume panel.
 
 ## Architecture
@@ -19,6 +20,7 @@ MetaTrader 5 chart
   uses _Symbol and _Period only
   calculates SMA, ATR, ADX, DI+, DI- and RSI
   sends closed candles only
+  sends read-only account, quote, and open position monitor data
         |
         | HTTP POST http://127.0.0.1:3001/mt5/update
         v
@@ -58,7 +60,8 @@ mt5-tradingview-local/
 |       |   `-- TradingDashboard.jsx
 |       |-- components/
 |       |   |-- StatusBar.jsx
-|       |   `-- IndicatorSettings.jsx
+|       |   |-- IndicatorSettings.jsx
+|       |   `-- TradingMonitor.jsx
 |       `-- utils/
 |           `-- wsClient.js
 `-- README.md
@@ -187,7 +190,7 @@ V2B intentionally does not add indicator color settings, screenshot/export tools
 V2C is still frontend-only. It does not change the MT5 EA, backend bridge, indicator calculations, closed-candle-only behavior, or trading scope.
 
 - Draggable panel resizing: use the horizontal separators between `Price / ATR` and `ATR / ADX/DI` to adjust panel heights. Minimum heights are enforced and saved in `localStorage`.
-- Synced crosshair across panels: moving the mouse over Price, ATR, or ADX/DI displays one aligned vertical marker across all visible chart panels at the same candle time.
+- Synced crosshair across panels: moving the mouse over Price, ATR, or ADX/DI displays one aligned vertical marker across all visible chart panels at the same candle time, with a small per-panel value readout attached to the marker.
 - ADX/DI matching colors: ADX, DI+, and DI- header/settings text use the same shared color constants as their chart lines.
 
 Manual V2C checks:
@@ -197,10 +200,103 @@ Manual V2C checks:
 3. Drag the `Price / ATR` separator and confirm the panels resize without overlapping.
 4. Drag the `ATR / ADX/DI` separator and confirm minimum heights are respected.
 5. Refresh the browser and confirm the resized heights are restored.
-6. Move the mouse over Price, ATR, and ADX/DI; confirm the vertical crosshair appears on all panels at the same candle.
+6. Move the mouse over Price, ATR, and ADX/DI; confirm the vertical crosshair appears on all panels at the same candle and each panel shows the matching value readout.
 7. Move the mouse out of the chart area and confirm the synced crosshair clears.
 8. Confirm ADX text matches the ADX line color, DI+ text matches the DI+ line color, and DI- text matches the DI- line color.
 9. Use `Fit content`, `Go to latest`, and `Reset view`; confirm all panels remain synchronized.
+
+## V3A Read-Only Trading Monitor
+
+V3A extends the MT5 payload with read-only trading monitor data:
+
+- `account`: login, server, currency, balance, equity, profit, margin, free margin, margin level, and leverage.
+- `quote`: current attached-chart symbol bid/ask, spread, digits, and symbol properties needed later for lot-size calculation: point, tick size, tick value, minimum volume, maximum volume, volume step, and contract size.
+- `positions`: all open account positions, including positions from symbols other than the attached chart.
+
+The EA sends monitor data every `UpdateSeconds` so PnL and quote values can refresh between closed candles. Candle history remains optimized: the EA sends the full candle array only on startup or when a new candle closes. The backend keeps the last candle snapshot and merges monitor-only updates before broadcasting to browsers.
+
+The frontend shows a read-only `Trading Monitor` side panel with account summary, chart-symbol quote, and an open-positions table. The position filter defaults to `Current symbol only` and can be switched to `All symbols`; the filter is saved in `localStorage`.
+
+V3A is still read-only. It does not place, close, or modify trades.
+
+V3A payload additions:
+
+```json
+{
+  "account": {
+    "login": 123456,
+    "server": "Broker-Server",
+    "currency": "USD",
+    "balance": 10000,
+    "equity": 10050.25,
+    "profit": 50.25,
+    "margin": 200,
+    "freeMargin": 9850.25,
+    "marginLevel": 5025.12,
+    "leverage": 100
+  },
+  "quote": {
+    "symbol": "EURUSD",
+    "bid": 1.08500,
+    "ask": 1.08512,
+    "spreadPoints": 12,
+    "digits": 5,
+    "point": 0.00001,
+    "tickSize": 0.00001,
+    "tickValue": 1,
+    "volumeMin": 0.01,
+    "volumeMax": 100,
+    "volumeStep": 0.01,
+    "contractSize": 100000
+  },
+  "positions": [
+    {
+      "ticket": 123456789,
+      "symbol": "EURUSD",
+      "type": "BUY",
+      "volume": 0.1,
+      "openPrice": 1.08000,
+      "sl": 1.07500,
+      "tp": 1.09000,
+      "currentPrice": 1.08500,
+      "profit": 50,
+      "swap": 0,
+      "commission": -0.5,
+      "openTime": 1710000000,
+      "magic": 0,
+      "comment": "manual"
+    }
+  ]
+}
+```
+
+Position filter behavior:
+
+- `Current symbol only`: shows positions whose `position.symbol` matches `snapshot.symbol` or `quote.symbol`.
+- `All symbols`: shows every open position sent by MT5.
+- Empty states distinguish between no current-symbol positions and no open positions.
+- The selected filter is restored after browser refresh.
+
+## V3A Manual Testing Checklist
+
+1. Start backend.
+2. Start frontend.
+3. Open MT5.
+4. Attach the EA to `EURUSD` `M15`.
+5. Confirm the chart still works.
+6. Confirm account summary appears in `Trading Monitor`.
+7. Confirm the quote card shows EURUSD bid/ask/spread.
+8. Open a small demo position manually in MT5.
+9. Confirm the position appears in the `Trading Monitor`.
+10. Confirm floating PnL updates every `UpdateSeconds`.
+11. Open a position on another symbol manually in MT5.
+12. Confirm `Current symbol only` hides the other symbol.
+13. Confirm `All symbols` shows both positions.
+14. Refresh the browser and confirm the selected filter is restored.
+15. Confirm no Buy/Sell/Close buttons exist.
+16. Confirm `http://127.0.0.1:3001/health` shows `hasAccount`, `hasQuote`, and `positionCount`.
+17. Confirm no frontend indicator calculations were added.
+18. Confirm chart sync, crosshair sync, and draggable panels still work.
 
 ## V2B Manual Testing Checklist
 
@@ -277,6 +373,7 @@ npm run dev
 
 - Dashboard mirrors only the chart where EA is attached.
 - Indicators are controlled from MT5 EA inputs, not the browser.
+- Account, quote, and position monitor fields are read-only.
 - Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
 - Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.
 - Panel height presets and dragged panel heights are browser-local UI preferences.
@@ -284,7 +381,7 @@ npm run dev
 - Only closed candles are displayed.
 - MT5 must be open and logged in.
 - Broker candle data may differ from TradingView.
-- This version does not place trades.
+- V3A is read-only and does not place, close, or modify trades yet.
 
 ## Future Improvements
 
@@ -294,5 +391,5 @@ npm run dev
 - Unfinished live candle mode.
 - Alerts.
 - Support/resistance.
-- Account/position monitor.
+- Account/position risk tools.
 - Packaged Windows `.exe`.

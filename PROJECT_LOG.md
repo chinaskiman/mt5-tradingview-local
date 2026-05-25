@@ -266,3 +266,58 @@
 - Result: Backend/frontend responded with HTTP 200. MT5 snapshot POST returned OK. Browser smoke test passed with no console errors. Web production build passed.
 - Known issues: Live MT5 manual testing is still recommended because the automated test uses a synthetic snapshot rather than a running MT5 terminal.
 - Next steps: Run the V2C manual checks with MT5 attached to EURUSD M15.
+
+## 2026-05-25 - Added crosshair-attached panel value readouts
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added per-panel value readouts attached to the synchronized vertical crosshair marker. Price, ATR, ADX/DI, and RSI now show the MT5-sent value for the hovered candle next to the shared crosshair line.
+- Why: When reviewing previous bars, oscillator values need to be visible at the same candle marker across panels instead of relying only on the corner legend.
+- Decisions: Kept the existing MT5-owned indicator data model. The browser only looks up values already received in the snapshot and does not calculate indicators or create candles.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser testing with live MT5 data is still recommended to confirm the readout placement feels right at different zoom levels.
+- Next steps: Move the crosshair over historical candles and confirm each panel's attached readout matches the same candle time.
+
+## 2026-05-25 - Added V3A read-only trading monitor payload
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `server/server.js`, `README.md`, `PROJECT_LOG.md`
+- What changed: Extended the EA payload with read-only `account`, `quote`, and `positions` sections. The EA now sends account/quote/position monitor data every timer interval, while full candle history is still sent only on startup or when a new closed candle appears. Added `chartUpdated` to distinguish full chart updates from monitor-only updates.
+- Why: The dashboard needs live read-only account, quote, symbol property, and open-position data without adding order placement, order closing, order modification, or frontend-side trading controls.
+- Decisions: Open positions are read for the whole account, not just the attached chart symbol. Position `commission` is sent as `0` for MT5-build compatibility because some builds do not expose commission as a direct position property. The backend keeps the latest candle snapshot and merges monitor-only updates so existing frontend chart behavior stays compatible.
+- Tests/checks run: `node --check server.js`; `git diff --check`; searched EA/server/frontend for order/trade execution functions; MetaEditor command-line compile of `MT5_Dashboard_Bridge.mq5`; temporary backend smoke test posting one full chart snapshot and one `chartUpdated:false` monitor-only update.
+- Result: Backend syntax check passed. Diff check had only expected CRLF warnings. No order execution/close/modify functions were found. EA compiled with 0 errors and 0 warnings. Backend smoke test returned HTTP 200 for full snapshot, monitor-only update, and `/health`.
+- Known issues: The frontend does not yet render a dedicated account/position monitor UI; V3A only sends and relays the data.
+- Next steps: Recompile/reload the EA in MT5, attach it to EURUSD M15, and inspect backend/WebSocket payloads to confirm account, quote, and position fields update between closed candles.
+
+## 2026-05-25 - Hardened backend V3A monitor validation
+
+- Files changed: `server/server.js`, `server/README.md`, `PROJECT_LOG.md`
+- What changed: Added validation for optional `account`, `quote`, and `positions` sections, including nullable account margin/leverage fields, nullable position SL/TP fields, empty positions arrays, and number-or-string identifiers. Extended `/health` with `hasAccount`, `hasQuote`, `positionCount`, and `lastTradingUpdate`. Added console logs for account equity, quote bid/ask, and open position count.
+- Why: The backend should explicitly support the new read-only MT5 monitor payload while remaining a bridge that stores and broadcasts the latest complete snapshot.
+- Decisions: The server performs only basic nullable-field normalization for `marginLevel`, `leverage`, `sl`, and `tp`. It does not calculate indicators, PnL, lot size, or any trading action.
+- Tests/checks run: `node --check server.js`; searched for order/trade endpoint or execution additions; temporary backend smoke test with a full snapshot, a `chartUpdated:false` monitor-only update with empty `positions`, an invalid quote payload, and `/health`.
+- Result: Backend syntax check passed. No trading endpoints or execution functions were found. Smoke test returned HTTP 200 for full and monitor-only snapshots, HTTP 400 for invalid quote data, and `/health` reported account/quote present, position count 0, and a trading update timestamp.
+- Known issues: V3A monitor data is still not rendered by the frontend UI.
+- Next steps: Add frontend read-only account/quote/positions panels when ready.
+
+## 2026-05-25 - Added frontend Trading Monitor panel
+
+- Files changed: `web/src/App.jsx`, `web/src/components/TradingMonitor.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a read-only `Trading Monitor` side panel with account summary, chart-symbol quote details, and an open positions table. Added a saved `Current symbol only` / `All symbols` position filter in existing UI preferences.
+- Why: The frontend needs to display V3A account, quote, and position data from MT5 without adding any trading controls or frontend-side trading calculations.
+- Decisions: PnL uses the MT5-sent `profit` value and account currency for display. Price formatting uses the quote digits for the current chart symbol and falls back to 5 decimals for other symbols. Missing account/quote data shows waiting states, and missing positions are treated as empty after a snapshot arrives.
+- Tests/checks run: `npm run build` in `web`; searched frontend/backend/EA code for order/trade execution or close-button additions.
+- Result: Web production build passed. No Buy/Sell/Close/order modification controls or trading execution functions were found.
+- Known issues: Live visual verification with actual MT5 account/position data is still needed.
+- Next steps: Start backend/frontend with the V3A EA attached, then confirm account, quote, and positions update live and the saved position filter restores after refresh.
+
+## 2026-05-25 - V3A integration test and documentation pass
+
+- Files changed: `README.md`, `server/README.md`, `PROJECT_LOG.md`
+- What changed: Expanded V3A documentation with Trading Monitor behavior, MT5 payload additions, symbol-property fields, position filter behavior, health endpoint expectations, and a manual MT5 testing checklist.
+- Why: V3A now spans MT5, backend, and frontend, so setup and verification steps need to describe the read-only monitor flow end to end.
+- Decisions: Documented live position testing as manual because it requires opening demo positions inside MT5. Kept V3A explicitly read-only with no order placement, close, or modification behavior.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; temporary backend/WebSocket smoke test with account, quote, two positions, full chart snapshot, and `chartUpdated:false` monitor-only update; temporary Vite dev-server HTTP 200 check; MetaEditor command-line compile of `MT5_Dashboard_Bridge.mq5`; searches for trading action controls/endpoints/functions and frontend indicator calculation additions; checked for lingering local server ports.
+- Result: Web production build passed. Backend syntax check passed. Backend/WebSocket smoke received V3A monitor fields, preserved candles on monitor-only update, and `/health` reported `hasAccount: true`, `hasQuote: true`, and `positionCount: 2`. Frontend dev server returned HTTP 200. EA compiled with 0 errors and 0 warnings. No Buy/Sell/Close/order modification controls or execution endpoints were found. No local backend/frontend ports were left running.
+- Known issues: Live MT5 manual checklist still needs to be run with real demo positions to verify broker-provided account/position values and PnL updates.
+- Next steps: Run the README V3A manual checklist on EURUSD M15, including one current-symbol demo position and one other-symbol demo position.

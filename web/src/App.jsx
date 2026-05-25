@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import TradingDashboard from './chart/TradingDashboard.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import IndicatorSettings from './components/IndicatorSettings.jsx';
+import TradingMonitor from './components/TradingMonitor.jsx';
 import { createDashboardSocket } from './utils/wsClient.js';
 
 const WS_URL = import.meta.env.VITE_DASHBOARD_WS_URL || 'ws://127.0.0.1:3001';
 const PREFS_KEY = 'mt5-dashboard-ui-preferences';
 const DEFAULT_PREFS = {
   settingsCollapsed: false,
+  tradingMonitorFilter: 'current',
   autoScroll: true,
   layoutPreset: 'balanced',
   chartSpacing: 6,
@@ -170,15 +172,22 @@ export default function App() {
           onPanelHeightsChange={updatePanelHeights}
           onTogglePanelCollapsed={togglePanelCollapsed}
         />
-        <IndicatorSettings
-          snapshot={snapshot}
-          collapsed={uiPrefs.settingsCollapsed}
-          chartSpacing={uiPrefs.chartSpacing}
-          visible={uiPrefs.visible}
-          onToggleCollapsed={() => updatePreference('settingsCollapsed', !uiPrefs.settingsCollapsed)}
-          onChartSpacingChange={(value) => updatePreference('chartSpacing', value)}
-          onVisibilityChange={updateVisibility}
-        />
+        <aside className="side-panel-stack" aria-label="Dashboard side panels">
+          <TradingMonitor
+            snapshot={snapshot}
+            filter={uiPrefs.tradingMonitorFilter}
+            onFilterChange={(value) => updatePreference('tradingMonitorFilter', value)}
+          />
+          <IndicatorSettings
+            snapshot={snapshot}
+            collapsed={uiPrefs.settingsCollapsed}
+            chartSpacing={uiPrefs.chartSpacing}
+            visible={uiPrefs.visible}
+            onToggleCollapsed={() => updatePreference('settingsCollapsed', !uiPrefs.settingsCollapsed)}
+            onChartSpacingChange={(value) => updatePreference('chartSpacing', value)}
+            onVisibilityChange={updateVisibility}
+          />
+        </aside>
       </section>
     </main>
   );
@@ -191,6 +200,7 @@ function loadPreferences() {
     return {
       ...DEFAULT_PREFS,
       ...parsed,
+      tradingMonitorFilter: normalizeTradingMonitorFilter(parsed?.tradingMonitorFilter),
       autoScroll: parsed?.autoScroll !== false,
       layoutPreset: normalizeLayoutPreset(parsed?.layoutPreset),
       chartSpacing: clamp(Number(parsed?.chartSpacing), 3, 14),
@@ -211,6 +221,10 @@ function loadPreferences() {
 
 function normalizeLayoutPreset(value) {
   return ['compact', 'balanced', 'largePrice'].includes(value) ? value : DEFAULT_PREFS.layoutPreset;
+}
+
+function normalizeTradingMonitorFilter(value) {
+  return ['current', 'all'].includes(value) ? value : DEFAULT_PREFS.tradingMonitorFilter;
 }
 
 function normalizePanelHeights(value) {
