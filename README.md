@@ -471,6 +471,7 @@ npm run dev
 - `No candles in payload`: the EA/server received no closed candles. Make sure the chart has loaded history.
 - `WebRequest failed` in MT5: add `http://127.0.0.1:3001` to MT5 WebRequest allowed URLs.
 - `No MT5 verification response received`: start the backend, keep the EA attached, and confirm `EnableRiskCalculatorCommands` is enabled in EA inputs.
+- `Failed to fetch` or `Could not reach backend risk endpoint`: restart the backend after updating, confirm it is listening on `http://127.0.0.1:3001`, then refresh the browser.
 - `Invalid WebRequest URL`: MT5 must allow exactly `http://127.0.0.1:3001`, not only the individual endpoint URLs.
 - `Waiting for account data` or `Waiting for quote data`: keep MT5 open and logged in, attach the EA to a live chart, and wait for the next timer update.
 - `Invalid symbol properties`: the broker did not provide valid tick size, tick value, or volume step for the symbol. Confirm the symbol is selected and tradable in MT5 Market Watch.

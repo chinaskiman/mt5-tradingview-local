@@ -23,7 +23,7 @@ export default function RiskCalculator({ snapshot, prefs, onPrefsChange, verific
       <div className="risk-header">
         <div>
           <h2>Risk Calculator</h2>
-          <p>Preliminary lot-size estimate</p>
+          <p>MT5-verified lot-size calculation</p>
         </div>
       </div>
 
@@ -35,7 +35,7 @@ export default function RiskCalculator({ snapshot, prefs, onPrefsChange, verific
       ) : (
         <>
           <p className="settings-note">
-            Calculations only. Preliminary estimate - final broker-normalized calculation will be verified by MT5.
+            Calculations only. Click Verify with MT5 for the broker-normalized lot size.
           </p>
 
           <section className="risk-form" aria-label="Risk calculator inputs">
@@ -132,27 +132,6 @@ export default function RiskCalculator({ snapshot, prefs, onPrefsChange, verific
           </section>
 
           <section className="risk-output" aria-label="Risk calculator output">
-            <h3>Preliminary Estimate</h3>
-            <OutputGrid
-              items={[
-                ['Symbol', quote.symbol || snapshot?.symbol || '--'],
-                ['Account currency', account.currency || '--'],
-                ['Risk basis value', formatMoney(calculation.riskBasisValue, account.currency)],
-                ['Risk amount', formatMoney(calculation.riskAmount, account.currency)],
-                ['Entry price', formatPrice(calculation.entryPrice, quote.digits)],
-                ['Stop-loss price', formatPrice(calculation.stopLossPrice, quote.digits)],
-                ['Stop distance points', formatPoints(calculation.stopDistancePoints)],
-                ['Tick size', formatRawNumber(quote.tickSize)],
-                ['Tick value', formatMoney(quote.tickValue, account.currency)],
-                ['Volume min', formatVolume(quote.volumeMin, quote.volumeStep)],
-                ['Volume max', formatVolume(quote.volumeMax, quote.volumeStep)],
-                ['Volume step', formatVolume(quote.volumeStep, quote.volumeStep)],
-                ['Raw calculated volume', formatVolume(calculation.rawVolume, quote.volumeStep, 2)],
-                ['Normalized volume', formatVolume(calculation.normalizedVolume, quote.volumeStep)],
-                ['Estimated loss at SL', formatMoney(calculation.estimatedLoss, account.currency)]
-              ]}
-            />
-
             <div className={`risk-status ${calculation.errors.length ? 'has-errors' : calculation.warnings.length ? 'has-warnings' : 'is-ok'}`}>
               <strong>Status</strong>
               {calculation.errors.length || calculation.warnings.length ? (
@@ -162,7 +141,7 @@ export default function RiskCalculator({ snapshot, prefs, onPrefsChange, verific
                   ))}
                 </ul>
               ) : (
-                <p>Ready. This is a preliminary frontend estimate.</p>
+                <p>Ready. Verify with MT5 to get the broker-normalized result.</p>
               )}
             </div>
 
@@ -241,19 +220,12 @@ function VerifiedResult({ result, status, error, currency, digits, stale }) {
       <h3>MT5 Verified Result</h3>
       <OutputGrid
         items={[
-          ['Request', result.requestId],
-          ['Risk basis amount', formatMoney(result.riskBasisAmount, currency)],
-          ['Risk amount', formatMoney(result.riskAmount, currency)],
           ['Entry price', formatPrice(result.entryPrice, digits)],
+          ['Risk amount', formatMoney(result.riskAmount, currency)],
           ['Stop-loss price', formatPrice(result.stopLossPrice, digits)],
           ['Stop distance points', formatPoints(result.stopDistancePoints)],
-          ['Tick size', formatRawNumber(result.tickSize)],
-          ['Tick value', formatMoney(result.tickValue, currency)],
-          ['Broker volume min', formatVolume(result.volumeMin, result.volumeStep)],
-          ['Broker volume max', formatVolume(result.volumeMax, result.volumeStep)],
-          ['Broker volume step', formatVolume(result.volumeStep, result.volumeStep)],
-          ['Raw volume', formatVolume(result.rawVolume, result.volumeStep, 2)],
           ['Normalized volume', formatVolume(result.normalizedVolume, result.volumeStep)],
+          ['Raw volume', formatVolume(result.rawVolume, result.volumeStep, 2)],
           ['Estimated loss', formatMoney(result.estimatedLoss, currency)]
         ]}
       />
@@ -532,19 +504,9 @@ function formatPrice(value, digits) {
   return parsed.toFixed(clampDigits(digits));
 }
 
-function formatNumber(value, decimals = 2) {
-  const parsed = numeric(value);
-  return parsed === null ? '--' : parsed.toFixed(decimals);
-}
-
 function formatPoints(value) {
   const parsed = numeric(value);
   return parsed === null ? '--' : String(Math.round(parsed));
-}
-
-function formatRawNumber(value) {
-  const parsed = numeric(value);
-  return parsed === null ? '--' : Number.parseFloat(parsed.toFixed(10)).toString();
 }
 
 function formatVolume(value, volumeStep, extraDecimals = 0) {

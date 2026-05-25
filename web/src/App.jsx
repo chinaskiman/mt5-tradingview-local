@@ -227,7 +227,7 @@ export default function App() {
         requestId,
         requestSignature,
         result: null,
-        error: error instanceof Error ? error.message : 'Risk calculation request failed.'
+        error: formatRiskRequestError(error)
       });
     }
   }
@@ -416,6 +416,16 @@ function createRiskRequestSignature(payload) {
     entryPrice: payload.entryPrice,
     stopLossPrice: payload.stopLossPrice
   });
+}
+
+function formatRiskRequestError(error) {
+  const message = error instanceof Error ? error.message : '';
+
+  if (message === 'Failed to fetch') {
+    return 'Could not reach backend risk endpoint. Check that the backend is running, then refresh the browser and try again.';
+  }
+
+  return message || 'Risk calculation request failed.';
 }
 
 function SidePanel({ open, active, onToggleOpen, onActiveChange, children }) {

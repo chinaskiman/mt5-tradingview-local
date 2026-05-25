@@ -376,3 +376,23 @@
 - Result: Web production build passed. Backend syntax check passed. EA compiled with 0 errors and 0 warnings. Backend command smoke test passed and only `CALCULATE_RISK_LOT` was returned by `/mt5/commands`. No order placement, close, modify, or trading endpoint code was found.
 - Known issues: Live MT5 manual checklist still needs to be run to confirm broker values and no order placement in the terminal.
 - Next steps: Run the README V3B manual checklist on EURUSD M15 with the EA attached.
+
+## 2026-05-25 - Fixed Risk Calculator fetch failure path
+
+- Files changed: `server/server.js`, `web/src/App.jsx`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added local-only CORS handling for browser requests from `http://127.0.0.1:*` and `http://localhost:*`, including preflight `OPTIONS` support. Replaced raw frontend `Failed to fetch` text with a clearer backend reachability message.
+- Why: The Risk Calculator `Verify with MT5` button posts from the Vite frontend on port `5173` to the backend on port `3001`; browsers treat that as cross-origin and need CORS headers.
+- Tests/checks run: `node --check server.js`; `npm run build` in `web`; reviewed diff.
+- Result: Static checks and web production build passed.
+- Known issues: Existing running backend processes must be restarted before the new CORS middleware is active.
+- Next steps: Stop and restart `cd server && npm start`, refresh the browser, then retry `Verify with MT5`.
+
+## 2026-05-25 - Simplified Risk Calculator result display
+
+- Files changed: `web/src/components/RiskCalculator.jsx`, `PROJECT_LOG.md`
+- What changed: Removed the visible `Preliminary Estimate` grid from the Risk Calculator. The panel now keeps validation/status and shows only the MT5 verified fields requested: entry price, risk amount, stop-loss price, stop distance points, normalized volume, raw volume, and estimated loss.
+- Why: The working workflow should focus on the final MT5 broker-normalized values used for manual trade entry.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`.
+- Result: Web production build and backend syntax check passed.
+- Known issues: Running browser needs refresh to show the simplified panel.
+- Next steps: Refresh the frontend and run one MT5 verification to confirm the compact result is easier to read.

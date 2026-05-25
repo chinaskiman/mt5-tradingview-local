@@ -8,6 +8,7 @@ const HEARTBEAT_MS = 30000;
 const RISK_COMMAND_TTL_MS = 10 * 60 * 1000;
 const RISK_RESULT_TTL_MS = 30 * 60 * 1000;
 const INDICATOR_FIELDS = ['smaFast', 'smaMid', 'smaSlow', 'atr', 'adx', 'diPlus', 'diMinus', 'rsi'];
+const LOCAL_BROWSER_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 
 const app = express();
 const server = http.createServer(app);
@@ -18,6 +19,25 @@ let lastUpdate = null;
 let lastTradingUpdate = null;
 const pendingRiskCommands = new Map();
 const riskResults = new Map();
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin && LOCAL_BROWSER_ORIGIN.test(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+
+  next();
+});
 
 app.use(express.json({ limit: '10mb' }));
 
