@@ -8,12 +8,14 @@ const WS_URL = import.meta.env.VITE_DASHBOARD_WS_URL || 'ws://127.0.0.1:3001';
 const PREFS_KEY = 'mt5-dashboard-ui-preferences';
 const DEFAULT_PREFS = {
   settingsCollapsed: false,
+  autoScroll: true,
+  layoutPreset: 'balanced',
   chartSpacing: 6,
   panelHeights: {
-    price: 420,
-    atr: 170,
-    adx: 190,
-    rsi: 170
+    price: 520,
+    atr: 120,
+    adx: 160,
+    rsi: 120
   },
   visible: {
     smaFast: true,
@@ -111,13 +113,25 @@ export default function App() {
     }));
   }
 
-  function updatePanelHeight(panelId, height) {
+  function updateLayoutPreset(layoutPreset, panelHeights) {
+    setUiPrefs((current) => ({
+      ...current,
+      layoutPreset,
+      panelHeights: {
+        ...DEFAULT_PREFS.panelHeights,
+        ...current.panelHeights,
+        ...panelHeights
+      }
+    }));
+  }
+
+  function updatePanelHeights(panelHeights) {
     setUiPrefs((current) => ({
       ...current,
       panelHeights: {
         ...DEFAULT_PREFS.panelHeights,
         ...current.panelHeights,
-        [panelId]: height
+        ...panelHeights
       }
     }));
   }
@@ -145,12 +159,16 @@ export default function App() {
       <section className="workspace">
         <TradingDashboard
           snapshot={snapshot}
+          autoScroll={uiPrefs.autoScroll}
+          layoutPreset={uiPrefs.layoutPreset}
           chartSpacing={uiPrefs.chartSpacing}
           visible={uiPrefs.visible}
           collapsedPanels={uiPrefs.collapsedPanels}
           panelHeights={uiPrefs.panelHeights}
+          onAutoScrollChange={(value) => updatePreference('autoScroll', value)}
+          onLayoutPresetChange={updateLayoutPreset}
+          onPanelHeightsChange={updatePanelHeights}
           onTogglePanelCollapsed={togglePanelCollapsed}
-          onPanelHeightChange={updatePanelHeight}
         />
         <IndicatorSettings
           snapshot={snapshot}
@@ -173,6 +191,8 @@ function loadPreferences() {
     return {
       ...DEFAULT_PREFS,
       ...parsed,
+      autoScroll: parsed?.autoScroll !== false,
+      layoutPreset: normalizeLayoutPreset(parsed?.layoutPreset),
       chartSpacing: clamp(Number(parsed?.chartSpacing), 3, 14),
       panelHeights: normalizePanelHeights(parsed?.panelHeights),
       visible: {
@@ -189,12 +209,16 @@ function loadPreferences() {
   }
 }
 
+function normalizeLayoutPreset(value) {
+  return ['compact', 'balanced', 'largePrice'].includes(value) ? value : DEFAULT_PREFS.layoutPreset;
+}
+
 function normalizePanelHeights(value) {
   return {
-    price: clamp(Number(value?.price), 260, 900, DEFAULT_PREFS.panelHeights.price),
-    atr: clamp(Number(value?.atr), 80, 520, DEFAULT_PREFS.panelHeights.atr),
-    adx: clamp(Number(value?.adx), 90, 560, DEFAULT_PREFS.panelHeights.adx),
-    rsi: clamp(Number(value?.rsi), 80, 520, DEFAULT_PREFS.panelHeights.rsi)
+    price: clamp(Number(value?.price), 250, 1200, DEFAULT_PREFS.panelHeights.price),
+    atr: clamp(Number(value?.atr), 90, 700, DEFAULT_PREFS.panelHeights.atr),
+    adx: clamp(Number(value?.adx), 120, 800, DEFAULT_PREFS.panelHeights.adx),
+    rsi: clamp(Number(value?.rsi), 90, 700, DEFAULT_PREFS.panelHeights.rsi)
   };
 }
 

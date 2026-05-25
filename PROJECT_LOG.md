@@ -141,8 +141,8 @@
 - What changed: Added saved frontend collapse state for ATR, ADX/DI, and RSI panels. Collapsed panels become compact rows showing the latest MT5-sent values to 5 decimals while keeping the full chart available through `Expand`.
 - Why: Sometimes the dashboard only needs the current oscillator number, such as ATR, without dedicating full vertical space to the oscillator chart.
 - Decisions: Collapse is separate from hide/show. Hiding removes the panel; collapsing keeps the latest value visible. The browser still does not calculate indicators or send indicator setting changes to MT5.
-- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
-- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`; started Vite dev server and checked `http://127.0.0.1:5173`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed. Vite dev server returned HTTP 200.
 - Known issues: Manual browser check with live MT5 data is still needed to confirm the collapsed rows display the expected latest values during updates.
 - Next steps: Start backend/frontend, attach or restart the EA, then collapse ATR/ADX/RSI panels and confirm the compact values update with each MT5 snapshot.
 
@@ -167,3 +167,102 @@
 - Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
 - Known issues: Manual browser check is still needed to confirm compact ATR/ADX/RSI rows are clean and click-to-expand works with live data.
 - Next steps: Start backend/frontend, collapse each oscillator panel, confirm no chart control buttons appear on the compact value rows, then click rows to expand.
+
+## 2026-05-24 - Added V2B chart control toolbar
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a dark chart toolbar with Auto-scroll ON/OFF, Fit content, Go to latest, and Reset view controls. Auto-scroll is saved in browser `localStorage`; the chart actions apply shared time-scale changes across all chart panels.
+- Why: The dashboard needs manual browser-side view controls without changing the MT5-owned data and indicator calculation architecture.
+- Decisions: Auto-scroll defaults to ON. When OFF, new snapshots update series data without forcing the user's visible range, including normal fixed-history rolling-window updates where the oldest candle changes. Reset view shows approximately the latest 180 loaded candles. The controls also include the RSI panel so all visible panels remain aligned.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser testing with live snapshots is still needed.
+- Next steps: Start backend/frontend, verify Auto-scroll OFF preserves scroll position, Auto-scroll ON follows the latest candle on new snapshots, and Fit content/Go to latest/Reset view move all panels together.
+
+## 2026-05-25 - Hardened chart time synchronization
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `PROJECT_LOG.md`
+- What changed: Strengthened visible logical range synchronization with a dedicated recursive-update guard, canonical remembered logical range, remembered visible time range, and comments explaining the sync path. Snapshot updates now preserve the user's actual candle time window when Auto-scroll is off, even when MT5 sends a fixed-size rolling history window.
+- Why: Price, ATR, and ADX/DI panels must remain synchronized through scroll, zoom, toolbar actions, new snapshots, browser resize, reconnect, and data reset.
+- Decisions: Kept all series on the same MT5 candle timestamps and continued using hidden whitespace sync series. RSI remains included in the same synchronization group because it exists in the current dashboard, but the required price/ATR/ADX behavior is unchanged.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser testing with live MT5 data is still needed for wheel/drag scroll and zoom behavior.
+- Next steps: Start backend/frontend, then verify scroll, zoom, Fit content, Go to latest, Reset view, resize, reconnect, and new snapshots keep all panels aligned.
+
+## 2026-05-25 - Replaced draggable heights with layout presets
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Removed the manual draggable panel-height implementation and added a small toolbar preset control with `Compact`, `Balanced`, and `Large Price`. The selected preset is saved in browser `localStorage`, with `Balanced` as the default.
+- Why: The current requirement calls for simple preset-based layout sizing and explicitly avoids draggable resizing for now.
+- Decisions: Presets resize chart rows using fractional grid tracks. Changing presets only changes frontend layout; it does not reload MT5 data, does not calculate indicators, and keeps the current visible chart range by resizing all chart instances and reapplying the remembered range. The existing RSI panel remains in the layout and uses matching preset proportions when visible.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser check is still needed for preset switching with live charts.
+- Next steps: Start backend/frontend, switch Compact/Balanced/Large Price, and confirm all chart containers resize without changing the visible range or desyncing.
+
+## 2026-05-25 - Hardened new snapshot range handling
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `PROJECT_LOG.md`
+- What changed: Updated the MT5 snapshot application path to capture the price chart's current visible logical range before applying new series data, then restore that range across all chart panels when Auto-scroll is off. When Auto-scroll is on and data changes, all panels scroll to the latest candle together.
+- Why: New MT5 snapshots must update candles and MT5-calculated indicators without pulling the user away from their current view when Auto-scroll is disabled.
+- Decisions: Kept the existing time-range fallback for rolling fixed-history snapshots, but made the captured visible logical range the primary restore path requested for snapshot updates. No backend or EA behavior changed.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Live browser testing is still needed after reconnect/full snapshot replacement.
+- Next steps: Verify Auto-scroll OFF preserves the current visible logical range on new MT5 snapshots and Auto-scroll ON moves all panels to the latest candle.
+
+## 2026-05-25 - Final V2B documentation polish
+
+- Files changed: `README.md`, `PROJECT_LOG.md`
+- What changed: Added a dedicated `V2B Chart Controls` README section covering Auto-scroll, Fit content, Go to latest, Reset view, panel height presets, and synchronized price/ATR/ADX scrolling and zooming. Added a 15-step V2B manual testing checklist.
+- Why: V2B chart controls need clear operator documentation and a focused verification path without expanding project scope.
+- Decisions: Documented that V2B remains frontend-only and intentionally excludes indicator color settings, screenshot/export tools, trade controls, frontend indicator calculations, and browser symbol/timeframe selectors.
+- Tests/checks run: Scope search for forbidden additions in `web/src`; `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Scope search found only expected matches such as CSS color constants, module `export`, and chart crosshair API names. Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: V2B still needs manual live MT5 browser verification using the README checklist.
+- Next steps: Run the V2B manual testing checklist with MT5 attached to EURUSD M15.
+
+## 2026-05-25 - Added draggable vertical chart panel resizing
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added horizontal drag handles between Price/ATR and ATR/ADX panels, saved panel heights in `localStorage`, restored saved heights on load, and kept minimum expanded heights of Price 250px, ATR 90px, and ADX/DI 120px. Presets now write saved pixel heights and resizing triggers Lightweight Charts resize handling without changing chart data.
+- Why: The dashboard needs smooth browser-local vertical resizing while preserving the MT5-owned data architecture and synchronized chart time ranges.
+- Decisions: Resizing is frontend-only. Collapsed panels remain compact and are not draggable until expanded. RSI remains supported by the existing dashboard layout, but the requested draggable handles are limited to Price/ATR and ATR/ADX.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser testing is still needed to verify pointer dragging feel, height persistence after refresh, and live chart alignment with MT5 data.
+- Next steps: Start backend/frontend, drag both resize handles, refresh the browser, and confirm panel heights persist and all panels stay time-synchronized.
+
+## 2026-05-25 - Improved synchronized crosshair across chart panels
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added synchronized vertical crosshair overlays for all chart panels, kept best-effort Lightweight Charts native `setCrosshairPosition` syncing when target panel values exist, and updated chart legends to show MT5-sent values for the candle under the active crosshair.
+- Why: Price, ATR, and ADX/DI need to show the same candle/time under the crosshair even when an oscillator has missing/null values and native crosshair positioning cannot be applied.
+- Decisions: The overlay is driven by `timeScale().timeToCoordinate()` using the exact MT5 candle timestamp. It does not interpolate data, create unfinished candles, or calculate indicators in the frontend. RSI remains included in the existing dashboard sync group.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Web production build passed.
+- Known issues: Manual browser testing with live MT5 data is still needed to verify mouse movement over Price, ATR, and ADX/DI, plus behavior after scroll, zoom, and panel resize.
+- Next steps: Start backend/frontend, move the crosshair over each chart panel, and confirm all visible panels show the same candle-time marker.
+
+## 2026-05-25 - Matched ADX/DI text colors to chart lines
+
+- Files changed: `web/src/utils/chartColors.js`, `web/src/chart/TradingDashboard.jsx`, `web/src/components/IndicatorSettings.jsx`, `web/src/styles.css`, `PROJECT_LOG.md`
+- What changed: Centralized chart and indicator colors in `chartColors.js`, reused ADX/DI colors for line series, ADX/DI legend values, crosshair-driven header values, and settings panel labels.
+- Why: ADX, DI+, and DI- text should exactly match the corresponding chart line colors without duplicated hardcoded values.
+- Decisions: Kept colors fixed and did not add frontend color pickers. No MT5 payload, backend bridge, indicator calculation, synchronization, or resizing behavior changed.
+- Tests/checks run: `node --check server.js`; `node --check src\utils\wsClient.js`; searched frontend color usage for ADX/DI constants; `npm run build` in `web`.
+- Result: Backend and WebSocket utility syntax checks passed. Color usage now points to shared constants. Web production build passed.
+- Known issues: Manual browser check is still needed to visually confirm the ADX/DI text contrast with live data.
+- Next steps: Start frontend and confirm ADX, DI+, and DI- header/settings text matches the chart line colors.
+
+## 2026-05-25 - V2C integration test and bug-fix pass
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `web/index.html`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a mouse-event fallback for synchronized crosshair overlays, changed crosshair overlays to use one canonical x-coordinate across all panels, and added an inline favicon to remove browser 404 console noise. Added a README V2C section with manual test steps.
+- Why: Headless browser testing showed native Lightweight Charts crosshair events were not enough under synthetic input, and per-panel `timeToCoordinate()` could differ by a few pixels because price-scale widths differ.
+- Decisions: The crosshair still uses the MT5 candle timestamp for data lookup and uses a shared overlay x-position for exact visual alignment. No MT5 EA or backend files changed. No frontend indicator calculations, trading features, color pickers, unfinished candles, or payload changes were added.
+- Tests/checks run: Started local backend/frontend; posted a realistic 220-candle MT5-style snapshot to `POST /mt5/update`; headless Chrome CDP smoke test for panel dragging, min heights, height persistence after refresh, crosshair from Price/ATR/ADX, crosshair clear-on-leave, ADX/DI color text, toolbar actions, and console errors; `node --check server.js`; `node --check src\utils\wsClient.js`; `npm run build` in `web`.
+- Result: Backend/frontend responded with HTTP 200. MT5 snapshot POST returned OK. Browser smoke test passed with no console errors. Web production build passed.
+- Known issues: Live MT5 manual testing is still recommended because the automated test uses a synthetic snapshot rather than a running MT5 terminal.
+- Next steps: Run the V2C manual checks with MT5 attached to EURUSD M15.

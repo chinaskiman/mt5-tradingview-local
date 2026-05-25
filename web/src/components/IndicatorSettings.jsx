@@ -1,3 +1,5 @@
+import { INDICATOR_COLORS } from '../utils/chartColors.js';
+
 const PRICE_ROWS = [
   ['SMA Fast', 'smaFast', 'smaFast'],
   ['SMA Mid', 'smaMid', 'smaMid'],
@@ -6,9 +8,9 @@ const PRICE_ROWS = [
 
 const OSCILLATOR_ROWS = [
   ['ATR panel', 'atr', 'atr'],
-  ['ADX line', 'adx', 'adx'],
-  ['DI+ line', 'diPlus', 'di'],
-  ['DI- line', 'diMinus', 'di'],
+  ['ADX line', 'adx', 'adx', INDICATOR_COLORS.adx],
+  ['DI+ line', 'diPlus', 'di', INDICATOR_COLORS.diPlus],
+  ['DI- line', 'diMinus', 'di', INDICATOR_COLORS.diMinus],
   ['RSI panel', 'rsi', 'rsi']
 ];
 
@@ -54,10 +56,11 @@ export default function IndicatorSettings({
           <section className="indicator-group" aria-label="Oscillator panels">
             <h3>Oscillators</h3>
             <div className="indicator-list">
-              {OSCILLATOR_ROWS.map(([label, visibleKey, settingKey]) => (
+              {OSCILLATOR_ROWS.map(([label, visibleKey, settingKey, color]) => (
                 <IndicatorRow
                   key={visibleKey}
                   label={label}
+                  color={color}
                   setting={settings[settingKey]}
                   visible={visible?.[visibleKey] !== false}
                   onVisibleChange={(checked) => onVisibilityChange(visibleKey, checked)}
@@ -98,14 +101,14 @@ export default function IndicatorSettings({
   );
 }
 
-function IndicatorRow({ label, setting, visible, onVisibleChange }) {
+function IndicatorRow({ label, color, setting, visible, onVisibleChange }) {
   const enabled = Boolean(setting?.enabled);
   const length = setting?.length ?? '--';
 
   return (
     <label className={`indicator-row ${enabled ? '' : 'is-disabled'}`}>
       <span className={`indicator-state ${enabled ? 'enabled' : 'disabled'}`} />
-      <span className="indicator-name">{label}</span>
+      <span className="indicator-name" style={color ? { color } : undefined}>{label}</span>
       <span className="indicator-meta">{enabled ? `Length ${length}` : 'MT5 off'}</span>
       <input
         type="checkbox"

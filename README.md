@@ -165,7 +165,65 @@ The page auto-reconnects if the backend is unavailable or the WebSocket disconne
 
 The dashboard symbol and timeframe come from the attached chart. V1 intentionally has no browser-side symbol or timeframe picker.
 
-The MT5 EA inputs control which indicators are calculated. The browser settings panel can hide or show already-received chart layers locally, but it does not send indicator changes back to MT5 in V1. Oscillator panels can also be collapsed to a compact row that keeps the latest MT5-sent value visible; click a compact row to expand it again. Drag the bottom edge of an expanded chart panel to resize its height; panel heights are saved in the browser.
+The MT5 EA inputs control which indicators are calculated. The browser settings panel can hide or show already-received chart layers locally, but it does not send indicator changes back to MT5 in V1. Oscillator panels can also be collapsed to a compact row that keeps the latest MT5-sent value visible; click a compact row to expand it again. The chart toolbar controls browser view only: auto-scroll, fit content, go to latest, reset view, panel height presets, and saved panel heights.
+
+## V2B Chart Controls
+
+The V2B toolbar is frontend-only. It changes the browser view, not the MT5 chart, backend payload, indicator calculations, or trading state.
+
+- `Auto-scroll ON/OFF`: when ON, new MT5 snapshots keep all chart panels at the latest candle. When OFF, candles and indicators update without moving the current visible range.
+- `Fit content`: shows all loaded closed candles across the price, ATR, and ADX/DI panels.
+- `Go to latest`: moves all panels to the newest received candle without changing the saved Auto-scroll setting.
+- `Reset view`: returns all panels to the default recent range, roughly the latest 150-200 candles when enough history exists.
+- Panel height presets: `Compact`, `Balanced`, and `Large Price` resize the chart layout. `Balanced` is the default and the selected preset is restored from `localStorage`.
+- Draggable panel heights: drag the horizontal handle between Price/ATR or ATR/ADX to resize those panels. Saved heights are restored from `localStorage`.
+- Synchronized scrolling and zooming: price, ATR, and ADX/DI use the same MT5 candle timestamps and shared visible logical range synchronization, so scrolling or zooming one panel should move the others with it.
+- Synchronized crosshair: moving the mouse over Price, ATR, or ADX/DI shows the vertical crosshair marker on all panels at the same candle time.
+
+V2B intentionally does not add indicator color settings, screenshot/export tools, trade controls, frontend indicator calculations, or a browser symbol/timeframe selector.
+
+## V2C Chart Polish
+
+V2C is still frontend-only. It does not change the MT5 EA, backend bridge, indicator calculations, closed-candle-only behavior, or trading scope.
+
+- Draggable panel resizing: use the horizontal separators between `Price / ATR` and `ATR / ADX/DI` to adjust panel heights. Minimum heights are enforced and saved in `localStorage`.
+- Synced crosshair across panels: moving the mouse over Price, ATR, or ADX/DI displays one aligned vertical marker across all visible chart panels at the same candle time.
+- ADX/DI matching colors: ADX, DI+, and DI- header/settings text use the same shared color constants as their chart lines.
+
+Manual V2C checks:
+
+1. Start backend and frontend.
+2. Confirm MT5 candles appear in the browser.
+3. Drag the `Price / ATR` separator and confirm the panels resize without overlapping.
+4. Drag the `ATR / ADX/DI` separator and confirm minimum heights are respected.
+5. Refresh the browser and confirm the resized heights are restored.
+6. Move the mouse over Price, ATR, and ADX/DI; confirm the vertical crosshair appears on all panels at the same candle.
+7. Move the mouse out of the chart area and confirm the synced crosshair clears.
+8. Confirm ADX text matches the ADX line color, DI+ text matches the DI+ line color, and DI- text matches the DI- line color.
+9. Use `Fit content`, `Go to latest`, and `Reset view`; confirm all panels remain synchronized.
+
+## V2B Manual Testing Checklist
+
+1. Start backend.
+2. Start frontend.
+3. Open MT5 and attach the EA to EURUSD M15.
+4. Confirm candles appear.
+5. Scroll price chart and confirm ATR and ADX/DI move with it.
+6. Scroll ATR and confirm price and ADX/DI move with it.
+7. Scroll ADX/DI and confirm price and ATR move with it.
+8. Zoom each panel and confirm all panels stay aligned.
+9. Move the mouse over Price and confirm the crosshair appears on ATR and ADX/DI at the same candle.
+10. Move the mouse over ATR and confirm the crosshair appears on Price and ADX/DI at the same candle.
+11. Move the mouse over ADX/DI and confirm the crosshair appears on Price and ATR at the same candle.
+12. Turn Auto-scroll ON and wait for a new closed candle. Confirm chart follows the latest candle.
+13. Turn Auto-scroll OFF, scroll back in history, wait for a new closed candle. Confirm chart updates but does not jump.
+14. Click Fit content and confirm all panels show all candles.
+15. Click Go to latest and confirm all panels move to the newest candle.
+16. Click Reset view and confirm all panels show the default recent range.
+17. Change panel height preset and confirm chart alignment is preserved.
+18. Drag the Price/ATR handle and confirm both panels resize without losing chart alignment.
+19. Drag the ATR/ADX handle and confirm both panels resize without losing chart alignment.
+20. Refresh browser and confirm Auto-scroll, panel preset, and dragged panel heights are restored from localStorage.
 
 ## Test with EURUSD M15
 
@@ -195,11 +253,17 @@ npm run dev
 12. Confirm RSI values appear when RSI is enabled in the EA inputs.
 13. Click `Full` on each chart panel and confirm the panel expands and exits cleanly.
 14. Click `Collapse` on ATR, ADX/DI, and RSI panels and confirm the latest values remain visible without chart control buttons on the compact row.
-15. Drag the bottom edge of expanded panels and confirm each panel height changes.
-16. Use the browser indicator toggles to hide/show SMA, ATR, ADX, DI, and RSI layers.
-17. Change EA inputs for indicator lengths or enabled state.
-18. Reattach or restart the EA.
-19. Confirm the frontend receives the new settings and values.
+15. Switch between `Compact`, `Balanced`, and `Large Price` presets and confirm panels resize cleanly.
+16. Move the crosshair over Price, ATR, and ADX/DI, then confirm the vertical marker appears on all panels at the same candle.
+17. Drag the horizontal resize handles between Price/ATR and ATR/ADX, then confirm all chart panels stay aligned.
+18. Refresh the browser and confirm the dragged heights are restored.
+19. Turn `Auto-scroll OFF`, scroll back, wait for the next MT5 snapshot, and confirm the visible range does not jump.
+20. Turn `Auto-scroll ON`, then confirm new MT5 snapshots keep the chart at the latest candle.
+21. Click `Fit content`, `Go to latest`, and `Reset view`, and confirm all chart panels move together.
+22. Use the browser indicator toggles to hide/show SMA, ATR, ADX, DI, and RSI layers.
+23. Change EA inputs for indicator lengths or enabled state.
+24. Reattach or restart the EA.
+25. Confirm the frontend receives the new settings and values.
 
 ## Troubleshooting
 
@@ -215,7 +279,8 @@ npm run dev
 - Indicators are controlled from MT5 EA inputs, not the browser.
 - Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
 - Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.
-- Saved panel heights are browser-local UI preferences.
+- Panel height presets and dragged panel heights are browser-local UI preferences.
+- Auto-scroll and chart view controls are browser-local preferences/actions.
 - Only closed candles are displayed.
 - MT5 must be open and logged in.
 - Broker candle data may differ from TradingView.
