@@ -29,6 +29,7 @@ Node.js local bridge
   Express validates the MT5 payload
   latest valid snapshot is kept in memory
   indicators are not calculated or modified
+  queues calculation-only risk commands for MT5 polling
         |
         | WebSocket ws://127.0.0.1:3001
         v
@@ -36,6 +37,11 @@ React browser dashboard
   web/src/*
   Vite app at http://127.0.0.1:5173
   Lightweight Charts renders price, ATR, ADX/DI, and RSI panels
+
+Risk calculator verification:
+  React POST /risk/calculate -> backend queue
+  MT5 GET /mt5/commands -> broker-normalized calculation
+  MT5 POST /mt5/risk-result -> backend WebSocket riskResult
 ```
 
 ## Project Layout
@@ -137,6 +143,9 @@ Expected local endpoints:
 ```text
 HTTP health:  http://127.0.0.1:3001/health
 MT5 POST:     http://127.0.0.1:3001/mt5/update
+Risk request: http://127.0.0.1:3001/risk/calculate
+MT5 commands: http://127.0.0.1:3001/mt5/commands
+Risk result:  http://127.0.0.1:3001/mt5/risk-result
 WebSocket:    ws://127.0.0.1:3001
 ```
 
@@ -215,7 +224,7 @@ V3A extends the MT5 payload with read-only trading monitor data:
 
 The EA sends monitor data every `UpdateSeconds` so PnL and quote values can refresh between closed candles. Candle history remains optimized: the EA sends the full candle array only on startup or when a new candle closes. The backend keeps the last candle snapshot and merges monitor-only updates before broadcasting to browsers.
 
-The frontend shows a read-only `Trading Monitor` side panel with account summary, chart-symbol quote, and an open-positions table. The position filter defaults to `Current symbol only` and can be switched to `All symbols`; the filter is saved in `localStorage`.
+The frontend uses a right-side menu with three sections: `Trading Monitor`, `Indicators`, and `Risk Calculator`. The whole side panel can be collapsed to give more width to the charts, and the active section is saved in `localStorage`. `Trading Monitor` shows account summary, chart-symbol quote, and an open-positions table. The position filter defaults to `Current symbol only` and can be switched to `All symbols`; the filter is also saved in `localStorage`.
 
 V3A is still read-only. It does not place, close, or modify trades.
 
@@ -293,10 +302,103 @@ Position filter behavior:
 12. Confirm `Current symbol only` hides the other symbol.
 13. Confirm `All symbols` shows both positions.
 14. Refresh the browser and confirm the selected filter is restored.
-15. Confirm no Buy/Sell/Close buttons exist.
-16. Confirm `http://127.0.0.1:3001/health` shows `hasAccount`, `hasQuote`, and `positionCount`.
-17. Confirm no frontend indicator calculations were added.
-18. Confirm chart sync, crosshair sync, and draggable panels still work.
+15. Switch the side menu between `Trading Monitor` and `Indicators`.
+16. Collapse the right side panel and confirm the chart area expands.
+17. Reopen the side panel and confirm the last selected section is restored.
+18. Confirm no Buy/Sell/Close buttons exist.
+19. Confirm `http://127.0.0.1:3001/health` shows `hasAccount`, `hasQuote`, and `positionCount`.
+20. Confirm no frontend indicator calculations were added.
+21. Confirm chart sync, crosshair sync, and draggable panels still work.
+
+## V3B Risk Calculator
+
+V3B adds a `Risk Calculator` section to the right-side menu. It uses the latest MT5 snapshot fields from `account` and `quote` to estimate position size, then can ask MT5 to verify the calculation with broker account and symbol properties.
+
+- Account basis: balance or equity.
+- Risk mode: percent or fixed account-currency amount.
+- Order side: buy or sell.
+- Entry price: current market price or manual entry price.
+- Stop-loss: manual SL price or distance in points.
+- Broker symbol properties: point, tick size, tick value, min/max volume, volume step, and contract size.
+
+The calculator displays symbol, account currency, risk basis value, risk amount, entry price, SL price, stop distance, tick details, volume limits, raw calculated volume, normalized volume, estimated loss at SL, and validation status/warnings.
+
+The frontend estimate is labeled: `Preliminary estimate - final broker-normalized calculation will be verified by MT5.`
+
+Validation rules:
+
+- Buy stop-loss must be below entry.
+- Sell stop-loss must be above entry.
+- Risk value must be positive.
+- Fixed money risk must not exceed account equity.
+- Invalid tick size, tick value, or volume step blocks calculation.
+- Percent risk above 5% shows a warning.
+- Very small stop distance shows a warning.
+
+The `Verify with MT5` button uses a calculation-only polling flow:
+
+```text
+Frontend POST /risk/calculate
+  -> backend stores pending CALCULATE_RISK_LOT command
+  -> MT5 EA polls GET /mt5/commands
+  -> MT5 calculates with AccountInfo* and SymbolInfo* values
+  -> MT5 POST /mt5/risk-result
+  -> backend broadcasts a WebSocket riskResult message
+  -> frontend shows the MT5 verified result
+```
+
+The MT5 verified result includes:
+
+- Risk basis amount and risk amount.
+- Entry and stop-loss prices.
+- Stop distance in points.
+- Tick size and tick value.
+- Broker volume min, max, and step.
+- Raw volume.
+- Normalized volume, rounded down to the broker volume step where possible.
+- Estimated loss at SL.
+- Warnings from MT5, such as broker min/max volume adjustment or high percent risk.
+
+MT5 uses this calculator formula:
+
+```text
+lossPerLot = abs(entryPrice - stopLossPrice) / tickSize * tickValue
+rawVolume = riskAmount / lossPerLot
+normalizedVolume = rawVolume rounded down to broker volume step, then constrained by broker min/max volume
+estimatedLoss = normalizedVolume * lossPerLot
+```
+
+The frontend preliminary estimate uses the same basic formula for immediate feedback, but the MT5 verified result should be treated as the final broker-normalized value because it uses live MT5 account and broker symbol properties.
+
+While verification is pending, the button is disabled and the status shows `Queued` or `Waiting for MT5`. If no result arrives within about 30 seconds, the frontend shows: `No MT5 verification response received. Check that the EA is running and command polling is enabled.` If calculator inputs change after a result is received, the previous MT5 result is marked stale with `Inputs changed - verify again.`
+
+V3B is still read-only. It does not place, close, or modify trades, and it does not add backend trading endpoints. `/risk/calculate`, `/mt5/commands`, and `/mt5/risk-result` are calculator endpoints only. Calculator preferences are saved in `localStorage`.
+
+Manual V3B checks:
+
+1. Start backend.
+2. Start frontend.
+3. Open MT5 and attach EA to EURUSD M15.
+4. Confirm account, quote, and chart data are visible.
+5. Open Risk Calculator.
+6. Set risk basis to Equity.
+7. Set risk mode to Percent.
+8. Set risk value to 1%.
+9. Set side to Buy.
+10. Use current market entry.
+11. Set SL distance to 500 points.
+12. Confirm preliminary estimate appears.
+13. Click Verify with MT5.
+14. Confirm MT5 verified result appears.
+15. Confirm normalized volume respects broker min/max/step.
+16. Change risk to fixed money and verify again.
+17. Test Sell with SL above entry.
+18. Test invalid Buy SL above entry and confirm error.
+19. Test invalid Sell SL below entry and confirm error.
+20. Refresh browser and confirm saved calculator preferences restore.
+21. Confirm no order is placed in MT5.
+22. Confirm no Buy/Sell trade buttons exist yet.
+23. Confirm existing chart sync and Trading Monitor still work.
 
 ## V2B Manual Testing Checklist
 
@@ -368,12 +470,18 @@ npm run dev
 - `Invalid MT5 payload`: the backend rejected the POST. Check the server console for the validation error.
 - `No candles in payload`: the EA/server received no closed candles. Make sure the chart has loaded history.
 - `WebRequest failed` in MT5: add `http://127.0.0.1:3001` to MT5 WebRequest allowed URLs.
+- `No MT5 verification response received`: start the backend, keep the EA attached, and confirm `EnableRiskCalculatorCommands` is enabled in EA inputs.
+- `Invalid WebRequest URL`: MT5 must allow exactly `http://127.0.0.1:3001`, not only the individual endpoint URLs.
+- `Waiting for account data` or `Waiting for quote data`: keep MT5 open and logged in, attach the EA to a live chart, and wait for the next timer update.
+- `Invalid symbol properties`: the broker did not provide valid tick size, tick value, or volume step for the symbol. Confirm the symbol is selected and tradable in MT5 Market Watch.
 
 ## Known Limitations
 
 - Dashboard mirrors only the chart where EA is attached.
 - Indicators are controlled from MT5 EA inputs, not the browser.
 - Account, quote, and position monitor fields are read-only.
+- Risk Calculator frontend results are preliminary estimates until `Verify with MT5` returns.
+- MT5 risk verification is calculation-only and depends on the EA polling `/mt5/commands`.
 - Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
 - Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.
 - Panel height presets and dragged panel heights are browser-local UI preferences.
@@ -381,7 +489,7 @@ npm run dev
 - Only closed candles are displayed.
 - MT5 must be open and logged in.
 - Broker candle data may differ from TradingView.
-- V3A is read-only and does not place, close, or modify trades yet.
+- V3A/V3B are read-only and do not place, close, or modify trades yet.
 
 ## Future Improvements
 

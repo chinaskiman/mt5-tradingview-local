@@ -14,14 +14,17 @@
    4. Compile this EA and attach it to the chart you want to mirror.
 
    The web dashboard mirrors only the chart where this EA is attached.
-   V1/V3A is view/read-only. This EA does not place, modify, or close trades.
+   V1/V3A/V3B is view/read-only. This EA does not place, modify, or close trades.
    V3A only adds read-only account, quote, symbol property, and open position
    monitor data to the local dashboard payload.
+   V3B can poll local calculator commands and return broker-normalized lot-size
+   estimates. This command path is calculation-only, not a trading path.
 */
 
 input int    HistoryBars   = 500;
 input string ServerUrl     = "http://127.0.0.1:3001/mt5/update";
 input int    UpdateSeconds = 2;
+input bool   EnableRiskCalculatorCommands = true;
 
 input bool EnableSMAFast = true;
 input int  SMAFastLength = 7;
@@ -98,6 +101,9 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    SendIfNeeded();
+
+   if(EnableRiskCalculatorCommands)
+      PollRiskCalculatorCommands();
 }
 
 void OnTick()
@@ -468,6 +474,259 @@ bool SendJson(const string payload, const datetime newestClosedTime)
    return true;
 }
 
+void PollRiskCalculatorCommands()
+{
+   string url = ServerBaseUrl() + "/mt5/commands";
+   char body[];
+   char response[];
+   string responseHeaders = "";
+
+   ResetLastError();
+   int status = WebRequest("GET", url, "", 5000, body, response, responseHeaders);
+   if(status == -1)
+   {
+      Print("Risk calculator command poll failed. Error: ", GetLastError());
+      return;
+   }
+
+   if(status < 200 || status >= 300)
+   {
+      Print("Risk calculator command poll returned HTTP ", status, ".");
+      return;
+   }
+
+   string responseText = CharArrayToString(response, 0, -1, CP_UTF8);
+   string commands[];
+   int commandCount = ExtractJsonObjectsFromArray(responseText, "commands", commands);
+
+   for(int i = 0; i < commandCount; i++)
+      ProcessRiskCalculatorCommand(commands[i]);
+}
+
+void ProcessRiskCalculatorCommand(const string commandJson)
+{
+   string type = JsonGetStringValue(commandJson, "type");
+   if(type != "CALCULATE_RISK_LOT")
+      return;
+
+   string requestId = JsonGetStringValue(commandJson, "requestId");
+   if(requestId == "")
+   {
+      Print("Risk calculator command ignored: missing requestId.");
+      return;
+   }
+
+   string symbol = JsonGetStringValue(commandJson, "symbol");
+   string side = JsonGetStringValue(commandJson, "side");
+   string riskBasis = JsonGetStringValue(commandJson, "riskBasis");
+   string riskMode = JsonGetStringValue(commandJson, "riskMode");
+   double riskValue = JsonGetDoubleValue(commandJson, "riskValue");
+   double entryPrice = JsonGetDoubleValue(commandJson, "entryPrice");
+   double stopLossPrice = JsonGetDoubleValue(commandJson, "stopLossPrice");
+
+   string error = "";
+   string warnings[];
+   string result = BuildRiskLotResult(requestId, symbol, side, riskBasis, riskMode, riskValue, entryPrice, stopLossPrice, error, warnings);
+
+   if(!PostRiskCalculatorResult(result))
+      Print("Failed to post risk calculator result for request ", requestId);
+}
+
+string BuildRiskLotResult(const string requestId,
+                          const string symbol,
+                          const string side,
+                          const string riskBasis,
+                          const string riskMode,
+                          const double riskValue,
+                          const double entryPrice,
+                          const double stopLossPrice,
+                          string &error,
+                          string &warnings[])
+{
+   if(symbol == "")
+      error = "Symbol is required";
+   else if(!SymbolSelect(symbol, true))
+      error = "Symbol is not available";
+   else if(side != "BUY" && side != "SELL")
+      error = "Side must be BUY or SELL";
+   else if(riskBasis != "EQUITY" && riskBasis != "BALANCE")
+      error = "Risk basis must be EQUITY or BALANCE";
+   else if(riskMode != "PERCENT" && riskMode != "FIXED")
+      error = "Risk mode must be PERCENT or FIXED";
+   else if(riskValue <= 0 || !MathIsValidNumber(riskValue))
+      error = "Risk value must be greater than 0";
+   else if(entryPrice <= 0 || !MathIsValidNumber(entryPrice))
+      error = "Entry price must be greater than 0";
+   else if(stopLossPrice <= 0 || !MathIsValidNumber(stopLossPrice))
+      error = "Stop-loss price must be greater than 0";
+   else if(side == "BUY" && stopLossPrice >= entryPrice)
+      error = "Stop-loss must be below entry for BUY";
+   else if(side == "SELL" && stopLossPrice <= entryPrice)
+      error = "Stop-loss must be above entry for SELL";
+
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   double volumeMin = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double volumeMax = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double volumeStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   long digits = SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double riskBasisAmount = riskBasis == "BALANCE" ? AccountInfoDouble(ACCOUNT_BALANCE) : AccountInfoDouble(ACCOUNT_EQUITY);
+   double riskAmount = riskMode == "PERCENT" ? riskBasisAmount * riskValue / 100.0 : riskValue;
+   double stopDistancePrice = MathAbs(entryPrice - stopLossPrice);
+   double stopDistancePoints = point > 0 ? stopDistancePrice / point : 0;
+   double lossPerLot = tickSize > 0 && tickValue > 0 ? stopDistancePrice / tickSize * tickValue : 0;
+   double rawVolume = lossPerLot > 0 ? riskAmount / lossPerLot : 0;
+   double normalizedVolume = 0;
+   double estimatedLoss = 0;
+
+   if(error == "")
+   {
+      if(tickSize <= 0 || !MathIsValidNumber(tickSize))
+         error = "Tick size must be greater than 0";
+      else if(tickValue <= 0 || !MathIsValidNumber(tickValue))
+         error = "Tick value must be greater than 0";
+      else if(volumeStep <= 0 || !MathIsValidNumber(volumeStep))
+         error = "Volume step must be greater than 0";
+      else if(riskBasisAmount <= 0 || !MathIsValidNumber(riskBasisAmount))
+         error = "Risk basis amount must be greater than 0";
+      else if(riskAmount <= 0 || !MathIsValidNumber(riskAmount))
+         error = "Risk amount must be greater than 0";
+      else if(riskMode == "FIXED" && accountEquity > 0 && riskValue > accountEquity)
+         error = "Fixed risk amount must not exceed account equity";
+      else if(lossPerLot <= 0 || !MathIsValidNumber(lossPerLot))
+         error = "Loss per lot must be greater than 0";
+   }
+
+   if(error == "")
+   {
+      if(riskMode == "PERCENT" && riskValue > 5.0)
+         AddWarning(warnings, "Risk percent is above 5%.");
+
+      if(point > 0 && (tickSize > point * 100.0 || tickSize < point / 10.0))
+         AddWarning(warnings, "Tick size is unusual compared with point size.");
+
+      if(stopDistancePoints > 0 && stopDistancePoints < 10.0)
+         AddWarning(warnings, "Stop distance is very small.");
+
+      if(tickSize > 0 && stopDistancePrice < tickSize)
+         AddWarning(warnings, "Stop distance is smaller than one tick.");
+
+      normalizedVolume = NormalizeRiskVolume(rawVolume, volumeMin, volumeMax, volumeStep);
+
+      if(volumeMin > 0 && rawVolume < volumeMin)
+         AddWarning(warnings, "Normalized volume was raised to broker minimum.");
+
+      if(volumeMax > 0 && rawVolume > volumeMax)
+         AddWarning(warnings, "Raw volume exceeded broker maximum and was capped.");
+
+      estimatedLoss = normalizedVolume * lossPerLot;
+      if(MathAbs(estimatedLoss - riskAmount) > MathMax(0.01, riskAmount * 0.01))
+         AddWarning(warnings, "Estimated loss differs materially from target risk after volume normalization.");
+   }
+
+   if(error != "")
+      return BuildRiskErrorJson(requestId, error, warnings);
+
+   string json = "{";
+   json += "\"type\":\"RISK_LOT_RESULT\",";
+   json += "\"requestId\":" + JsonString(requestId) + ",";
+   json += "\"ok\":true,";
+   json += "\"symbol\":" + JsonString(symbol) + ",";
+   json += "\"side\":" + JsonString(side) + ",";
+   json += "\"riskBasis\":" + JsonString(riskBasis) + ",";
+   json += "\"riskMode\":" + JsonString(riskMode) + ",";
+   json += "\"riskValue\":" + JsonNumber(riskValue, 8) + ",";
+   json += "\"riskBasisAmount\":" + JsonNumber(riskBasisAmount, 2) + ",";
+   json += "\"riskAmount\":" + JsonNumber(riskAmount, 2) + ",";
+   json += "\"entryPrice\":" + JsonNumber(entryPrice, (int)digits) + ",";
+   json += "\"stopLossPrice\":" + JsonNumber(stopLossPrice, (int)digits) + ",";
+   json += "\"stopDistancePoints\":" + JsonNumber(stopDistancePoints, 2) + ",";
+   json += "\"tickSize\":" + JsonNumber(tickSize, 8) + ",";
+   json += "\"tickValue\":" + JsonNumber(tickValue, 8) + ",";
+   json += "\"volumeMin\":" + JsonNumber(volumeMin, 8) + ",";
+   json += "\"volumeMax\":" + JsonNumber(volumeMax, 8) + ",";
+   json += "\"volumeStep\":" + JsonNumber(volumeStep, 8) + ",";
+   json += "\"rawVolume\":" + JsonNumber(rawVolume, 8) + ",";
+   json += "\"normalizedVolume\":" + JsonNumber(normalizedVolume, 8) + ",";
+   json += "\"estimatedLoss\":" + JsonNumber(estimatedLoss, 2) + ",";
+   json += "\"warnings\":" + JsonStringArray(warnings);
+   json += "}";
+   return json;
+}
+
+double NormalizeRiskVolume(const double rawVolume, const double volumeMin, const double volumeMax, const double volumeStep)
+{
+   if(rawVolume <= 0 || volumeStep <= 0)
+      return 0;
+
+   double normalized = MathFloor(rawVolume / volumeStep) * volumeStep;
+
+   if(volumeMin > 0 && normalized < volumeMin)
+      normalized = volumeMin;
+
+   if(volumeMax > 0 && normalized > volumeMax)
+      normalized = volumeMax;
+
+   return NormalizeDouble(normalized, VolumeDigitsFromStep(volumeStep));
+}
+
+int VolumeDigitsFromStep(const double step)
+{
+   string text = DoubleToString(step, 8);
+   int dot = StringFind(text, ".");
+   if(dot < 0)
+      return 0;
+
+   int digits = StringLen(text) - dot - 1;
+   while(digits > 0 && StringGetCharacter(text, dot + digits) == '0')
+      digits--;
+
+   return digits;
+}
+
+string BuildRiskErrorJson(const string requestId, const string error, string &warnings[])
+{
+   string json = "{";
+   json += "\"type\":\"RISK_LOT_RESULT\",";
+   json += "\"requestId\":" + JsonString(requestId) + ",";
+   json += "\"ok\":false,";
+   json += "\"error\":" + JsonString(error) + ",";
+   json += "\"warnings\":" + JsonStringArray(warnings);
+   json += "}";
+   return json;
+}
+
+bool PostRiskCalculatorResult(const string payload)
+{
+   char body[];
+   int bodyLength = StringToCharArray(payload, body, 0, WHOLE_ARRAY, CP_UTF8);
+   if(bodyLength > 0)
+      ArrayResize(body, bodyLength - 1);
+
+   char response[];
+   string responseHeaders = "";
+   string headers = "Content-Type: application/json\r\n";
+   string url = ServerBaseUrl() + "/mt5/risk-result";
+
+   ResetLastError();
+   int status = WebRequest("POST", url, headers, 5000, body, response, responseHeaders);
+   if(status == -1)
+   {
+      Print("Risk result WebRequest failed. Error: ", GetLastError());
+      return false;
+   }
+
+   if(status < 200 || status >= 300)
+   {
+      Print("Risk result post returned HTTP ", status, ". Response: ", CharArrayToString(response, 0, -1, CP_UTF8));
+      return false;
+   }
+
+   return true;
+}
+
 void CreateStatusLabel()
 {
    ObjectDelete(0, LEGACY_STATUS_LABEL_NAME);
@@ -553,6 +812,19 @@ string JsonBool(const bool value)
    return value ? "true" : "false";
 }
 
+string JsonStringArray(string &values[])
+{
+   string json = "[";
+   for(int i = 0; i < ArraySize(values); i++)
+   {
+      if(i > 0)
+         json += ",";
+      json += JsonString(values[i]);
+   }
+   json += "]";
+   return json;
+}
+
 string JsonString(string value)
 {
    StringReplace(value, "\\", "\\\\");
@@ -561,6 +833,180 @@ string JsonString(string value)
    StringReplace(value, "\n", "\\n");
    StringReplace(value, "\t", "\\t");
    return "\"" + value + "\"";
+}
+
+void AddWarning(string &warnings[], const string warning)
+{
+   int size = ArraySize(warnings);
+   ArrayResize(warnings, size + 1);
+   warnings[size] = warning;
+}
+
+string ServerBaseUrl()
+{
+   int marker = StringFind(ServerUrl, "/mt5/update");
+   if(marker >= 0)
+      return StringSubstr(ServerUrl, 0, marker);
+
+   return "http://127.0.0.1:3001";
+}
+
+int ExtractJsonObjectsFromArray(const string json, const string key, string &objects[])
+{
+   ArrayResize(objects, 0);
+
+   int keyPos = StringFind(json, "\"" + key + "\"");
+   if(keyPos < 0)
+      return 0;
+
+   int arrayStart = StringFind(json, "[", keyPos);
+   if(arrayStart < 0)
+      return 0;
+
+   bool inString = false;
+   bool escaped = false;
+   int depth = 0;
+   int objectStart = -1;
+
+   for(int i = arrayStart + 1; i < StringLen(json); i++)
+   {
+      ushort ch = StringGetCharacter(json, i);
+
+      if(inString)
+      {
+         if(escaped)
+            escaped = false;
+         else if(ch == '\\')
+            escaped = true;
+         else if(ch == '"')
+            inString = false;
+         continue;
+      }
+
+      if(ch == '"')
+      {
+         inString = true;
+         continue;
+      }
+
+      if(ch == '{')
+      {
+         if(depth == 0)
+            objectStart = i;
+         depth++;
+         continue;
+      }
+
+      if(ch == '}')
+      {
+         depth--;
+         if(depth == 0 && objectStart >= 0)
+         {
+            int size = ArraySize(objects);
+            ArrayResize(objects, size + 1);
+            objects[size] = StringSubstr(json, objectStart, i - objectStart + 1);
+            objectStart = -1;
+         }
+         continue;
+      }
+
+      if(ch == ']' && depth == 0)
+         break;
+   }
+
+   return ArraySize(objects);
+}
+
+string JsonGetStringValue(const string json, const string key)
+{
+   int colon = JsonFindValueStart(json, key);
+   if(colon < 0)
+      return "";
+
+   int start = SkipWhitespace(json, colon);
+   if(start >= StringLen(json) || StringGetCharacter(json, start) != '"')
+      return "";
+
+   string value = "";
+   bool escaped = false;
+
+   for(int i = start + 1; i < StringLen(json); i++)
+   {
+      ushort ch = StringGetCharacter(json, i);
+
+      if(escaped)
+      {
+         if(ch == 'n')
+            value += "\n";
+         else if(ch == 'r')
+            value += "\r";
+         else if(ch == 't')
+            value += "\t";
+         else
+            value += ShortToString(ch);
+         escaped = false;
+         continue;
+      }
+
+      if(ch == '\\')
+      {
+         escaped = true;
+         continue;
+      }
+
+      if(ch == '"')
+         break;
+
+      value += ShortToString(ch);
+   }
+
+   return value;
+}
+
+double JsonGetDoubleValue(const string json, const string key)
+{
+   int colon = JsonFindValueStart(json, key);
+   if(colon < 0)
+      return 0;
+
+   int start = SkipWhitespace(json, colon);
+   int end = start;
+
+   while(end < StringLen(json))
+   {
+      ushort ch = StringGetCharacter(json, end);
+      if(ch == ',' || ch == '}' || ch == ']')
+         break;
+      end++;
+   }
+
+   return StringToDouble(StringSubstr(json, start, end - start));
+}
+
+int JsonFindValueStart(const string json, const string key)
+{
+   int keyPos = StringFind(json, "\"" + key + "\"");
+   if(keyPos < 0)
+      return -1;
+
+   int colon = StringFind(json, ":", keyPos);
+   if(colon < 0)
+      return -1;
+
+   return colon + 1;
+}
+
+int SkipWhitespace(const string text, int pos)
+{
+   while(pos < StringLen(text))
+   {
+      ushort ch = StringGetCharacter(text, pos);
+      if(ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+         break;
+      pos++;
+   }
+
+   return pos;
 }
 
 string TimeframeToString(const ENUM_TIMEFRAMES timeframe)

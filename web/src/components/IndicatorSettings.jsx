@@ -16,88 +16,79 @@ const OSCILLATOR_ROWS = [
 
 export default function IndicatorSettings({
   snapshot,
-  collapsed,
   chartSpacing,
   visible,
-  onToggleCollapsed,
   onChartSpacingChange,
   onVisibilityChange
 }) {
   const settings = snapshot?.settings || {};
 
   return (
-    <aside className={`settings-panel ${collapsed ? 'is-collapsed' : ''}`} aria-label="Indicator settings">
+    <section className="settings-panel" aria-label="Indicator settings">
       <div className="settings-header">
         <h2>Indicators</h2>
-        <button type="button" className="icon-button" onClick={onToggleCollapsed} title={collapsed ? 'Expand settings' : 'Collapse settings'}>
-          {collapsed ? '>' : '<'}
-        </button>
       </div>
 
-      {collapsed ? null : (
-        <>
-          <p className="settings-note">Indicator settings are controlled from the MT5 EA inputs. Browser toggles only hide or show local chart layers.</p>
+      <p className="settings-note">Indicator settings are controlled from the MT5 EA inputs. Browser toggles only hide or show local chart layers.</p>
 
-          <section className="indicator-group" aria-label="Price overlays">
-            <h3>Price overlays</h3>
-            <div className="indicator-list">
-              {PRICE_ROWS.map(([label, visibleKey, settingKey]) => (
-                <IndicatorRow
-                  key={visibleKey}
-                  label={label}
-                  setting={settings[settingKey]}
-                  visible={visible?.[visibleKey] !== false}
-                  onVisibleChange={(checked) => onVisibilityChange(visibleKey, checked)}
-                />
-              ))}
-            </div>
-          </section>
+      <section className="indicator-group" aria-label="Price overlays">
+        <h3>Price overlays</h3>
+        <div className="indicator-list">
+          {PRICE_ROWS.map(([label, visibleKey, settingKey]) => (
+            <IndicatorRow
+              key={visibleKey}
+              label={label}
+              setting={settings[settingKey]}
+              visible={visible?.[visibleKey] !== false}
+              onVisibleChange={(checked) => onVisibilityChange(visibleKey, checked)}
+            />
+          ))}
+        </div>
+      </section>
 
-          <section className="indicator-group" aria-label="Oscillator panels">
-            <h3>Oscillators</h3>
-            <div className="indicator-list">
-              {OSCILLATOR_ROWS.map(([label, visibleKey, settingKey, color]) => (
-                <IndicatorRow
-                  key={visibleKey}
-                  label={label}
-                  color={color}
-                  setting={settings[settingKey]}
-                  visible={visible?.[visibleKey] !== false}
-                  onVisibleChange={(checked) => onVisibilityChange(visibleKey, checked)}
-                />
-              ))}
-            </div>
-          </section>
+      <section className="indicator-group" aria-label="Oscillator panels">
+        <h3>Oscillators</h3>
+        <div className="indicator-list">
+          {OSCILLATOR_ROWS.map(([label, visibleKey, settingKey, color]) => (
+            <IndicatorRow
+              key={visibleKey}
+              label={label}
+              color={color}
+              setting={settings[settingKey]}
+              visible={visible?.[visibleKey] !== false}
+              onVisibleChange={(checked) => onVisibilityChange(visibleKey, checked)}
+            />
+          ))}
+        </div>
+      </section>
 
-          <section className="frontend-prefs" aria-label="Frontend preferences">
-            <h3>Display</h3>
-            <label className="range-row">
-              <span>Bar spacing</span>
-              <input
-                type="range"
-                min="3"
-                max="14"
-                step="1"
-                value={chartSpacing}
-                onChange={(event) => onChartSpacingChange(Number(event.target.value))}
-              />
-              <span className="range-value">{chartSpacing}</span>
-            </label>
-          </section>
+      <section className="frontend-prefs" aria-label="Frontend preferences">
+        <h3>Display</h3>
+        <label className="range-row">
+          <span>Bar spacing</span>
+          <input
+            type="range"
+            min="3"
+            max="14"
+            step="1"
+            value={chartSpacing}
+            onChange={(event) => onChartSpacingChange(Number(event.target.value))}
+          />
+          <span className="range-value">{chartSpacing}</span>
+        </label>
+      </section>
 
-          <dl className="snapshot-details">
-            <dt>Source</dt>
-            <dd>{snapshot?.source || '--'}</dd>
+      <dl className="snapshot-details">
+        <dt>Source</dt>
+        <dd>{snapshot?.source || '--'}</dd>
 
-            <dt>Candles</dt>
-            <dd>{count(snapshot?.candles)}</dd>
+        <dt>Candles</dt>
+        <dd>{count(snapshot?.candles)}</dd>
 
-            <dt>Last closed</dt>
-            <dd>{formatUnixTime(snapshot?.lastClosedTime)}</dd>
-          </dl>
-        </>
-      )}
-    </aside>
+        <dt>Last closed</dt>
+        <dd>{formatUnixTime(snapshot?.lastClosedTime)}</dd>
+      </dl>
+    </section>
   );
 }
 

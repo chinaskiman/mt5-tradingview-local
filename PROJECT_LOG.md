@@ -321,3 +321,58 @@
 - Result: Web production build passed. Backend syntax check passed. Backend/WebSocket smoke received V3A monitor fields, preserved candles on monitor-only update, and `/health` reported `hasAccount: true`, `hasQuote: true`, and `positionCount: 2`. Frontend dev server returned HTTP 200. EA compiled with 0 errors and 0 warnings. No Buy/Sell/Close/order modification controls or execution endpoints were found. No local backend/frontend ports were left running.
 - Known issues: Live MT5 manual checklist still needs to be run with real demo positions to verify broker-provided account/position values and PnL updates.
 - Next steps: Run the README V3A manual checklist on EURUSD M15, including one current-symbol demo position and one other-symbol demo position.
+
+## 2026-05-25 - Reworked right panel into collapsible section menu
+
+- Files changed: `web/src/App.jsx`, `web/src/components/IndicatorSettings.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Replaced the stacked right-side `Trading Monitor` and collapsing `Indicators` panels with one right-side menu. The menu has `Trading Monitor` and `Indicators` tabs, saves the active section in `localStorage`, and can collapse to a narrow rail so the chart area has more width.
+- Why: The previous indicator-section collapse was awkward and did not close cleanly. A single side-panel menu is clearer and gives more chart space when closed.
+- Decisions: Removed the separate Indicators collapse control. The whole right side panel now owns open/closed state, while oscillator chart panel collapse behavior is unchanged.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; searched for stale settings-panel collapse state/hooks; temporary Vite dev-server HTTP 200 check; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. No stale `settingsCollapsed` or side-panel stack references remain. Frontend dev server returned HTTP 200. Diff check had only expected CRLF warnings.
+- Known issues: Manual browser verification is still recommended for the menu open/close feel with live charts.
+- Next steps: Start the frontend, switch between `Trading Monitor` and `Indicators`, collapse/reopen the side panel, and confirm charts resize cleanly.
+
+## 2026-05-25 - Added V3B frontend Risk Calculator
+
+- Files changed: `web/src/App.jsx`, `web/src/components/RiskCalculator.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a `Risk Calculator` tab to the right-side menu with saved local preferences for risk basis, risk mode/value, order side, entry mode/manual entry, stop-loss mode/price, and stop distance points. Added preliminary frontend lot-size calculation using MT5-sent account and quote fields.
+- Why: The dashboard needs a read-only lot-size planning tool before MT5-side broker verification is added.
+- Decisions: The calculator is explicitly labeled as a preliminary estimate. It uses MT5-sent tick size/value and volume min/max/step, normalizes volume locally, and displays validation errors/warnings. It does not place, close, or modify trades and does not call the backend.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; searched backend/frontend/EA code for order placement, close, modification endpoints/functions, and trading action controls; temporary Vite dev-server HTTP 200 check; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. Frontend dev server returned HTTP 200. No backend trading endpoints or execution functions were added; only existing read-only comments/documentation matched the scope search. Diff check had only expected CRLF warnings.
+- Known issues: Final broker-normalized calculation is not verified by MT5 yet.
+- Next steps: Manually test calculator scenarios with live MT5 quote data, then add MT5-side verification in a later step.
+
+## 2026-05-25 - Added V3B MT5 risk verification command flow
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `server/server.js`, `server/README.md`, `web/src/App.jsx`, `web/src/components/RiskCalculator.jsx`, `web/src/utils/wsClient.js`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added calculation-only risk verification flow. The browser queues `POST /risk/calculate`, the backend stores pending `CALCULATE_RISK_LOT` commands, the EA polls `GET /mt5/commands`, MT5 calculates broker-normalized lot size using account and symbol properties, MT5 posts `POST /mt5/risk-result`, and the backend broadcasts a `riskResult` WebSocket message back to the frontend.
+- Why: V3B needs MT5-side broker verification for the Risk Calculator while keeping the app read-only and avoiding direct inbound HTTP to MT5.
+- Decisions: Commands are marked delivered after polling to avoid duplicate processing. Pending commands expire after 10 minutes and stored results after 30 minutes. MT5 rounds volume down to the broker step when possible, then applies min/max limits and returns warnings when normalization changes target risk materially.
+- Tests/checks run: `node --check server.js`; `npm run build` in `web`; MetaEditor compile of `MT5_Dashboard_Bridge.mq5` after copying it to the MT5 `MQL5\Experts` folder; backend smoke test for queue, command poll, risk result post, WebSocket broadcast, command non-repeat, invalid request rejection, and `/health`; search for order/trade execution endpoints/functions; `git diff --check`; checked ports `3001` and `5173`.
+- Result: Backend syntax check passed. Web production build passed. EA compiled with 0 errors and 0 warnings. Backend risk command smoke test passed. Scope search found only read-only documentation/comments, no trading execution code. Diff check had only expected CRLF warnings. No local backend/frontend ports were left running.
+- Known issues: Live browser/MT5 manual test still needs to be run from the Risk Calculator with the EA attached so MT5 can poll and return real broker values.
+- Next steps: Start backend/frontend, attach the EA, open `Risk Calculator`, click `Verify with MT5`, and confirm the verified result appears with any broker warnings.
+
+## 2026-05-25 - Completed frontend V3B risk verification UI
+
+- Files changed: `web/src/App.jsx`, `web/src/components/RiskCalculator.jsx`, `web/src/utils/wsClient.js`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Connected the Risk Calculator UI to the backend/MT5 verification flow with a `Verify with MT5` button, queued/waiting/verified/failed states, requestId matching, 30-second no-response timeout, direct `RISK_LOT_RESULT` WebSocket support, stale-result detection when inputs change, and a fuller MT5 verified result display.
+- Why: The frontend needed to clearly separate the preliminary browser estimate from the final MT5 broker-normalized calculation result.
+- Decisions: The frontend accepts both backend wrapper messages (`type: riskResult`) and direct MT5-style messages (`type: RISK_LOT_RESULT`). Pending requests disable the verify button. Stale results remain visible but are explicitly marked `Inputs changed - verify again.`
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for order/trade execution or trading endpoints; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. Scope search found no order placement, close, modification, or trading endpoint additions. Diff check had only expected CRLF warnings.
+- Known issues: Live MT5 manual verification is still needed to confirm the EA polls and the browser receives real broker-normalized values.
+- Next steps: Start backend/frontend, attach the EA, submit a Risk Calculator verification, and confirm the MT5 Verified Result section updates before the timeout.
+
+## 2026-05-25 - V3B polish and validation pass
+
+- Files changed: `web/src/components/RiskCalculator.jsx`, `mt5/MT5_Dashboard_Bridge.mq5`, `README.md`, `PROJECT_LOG.md`
+- What changed: Hardened Risk Calculator validation and formatting. Fixed-money risk now blocks when it exceeds account equity, percent risk above 5% warns, very small stops warn, missing account/quote states are split clearly, points are displayed as integers, and lot values format from broker volume step. MT5-side verification now mirrors fixed-risk/equity blocking and small-stop warnings.
+- Why: V3B needs clear calculation-only behavior and practical validation before any future trading features are considered.
+- Decisions: Backend remains a calculation queue only and still only emits `CALCULATE_RISK_LOT` commands. The frontend and EA block invalid tick size, tick value, volume step, stop direction, and non-positive risk. Warnings remain visible but not styled as hard errors.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; MetaEditor compile of `MT5_Dashboard_Bridge.mq5` after copying it to the MT5 `MQL5\Experts` folder; backend command-flow smoke test including queue, command poll, result broadcast, invalid Buy SL rejection, and invalid command result type rejection; scope search for trading execution/endpoints.
+- Result: Web production build passed. Backend syntax check passed. EA compiled with 0 errors and 0 warnings. Backend command smoke test passed and only `CALCULATE_RISK_LOT` was returned by `/mt5/commands`. No order placement, close, modify, or trading endpoint code was found.
+- Known issues: Live MT5 manual checklist still needs to be run to confirm broker values and no order placement in the terminal.
+- Next steps: Run the README V3B manual checklist on EURUSD M15 with the EA attached.

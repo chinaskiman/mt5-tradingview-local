@@ -5,6 +5,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 const PORT = 3001;
 const HOST = '127.0.0.1';
 const HEARTBEAT_MS = 30000;
+const RISK_COMMAND_TTL_MS = 10 * 60 * 1000;
+const RISK_RESULT_TTL_MS = 30 * 60 * 1000;
 const INDICATOR_FIELDS = ['smaFast', 'smaMid', 'smaSlow', 'atr', 'adx', 'diPlus', 'diMinus', 'rsi'];
 
 const app = express();
@@ -14,6 +16,8 @@ const wss = new WebSocketServer({ server });
 let latestSnapshot = null;
 let lastUpdate = null;
 let lastTradingUpdate = null;
+const pendingRiskCommands = new Map();
+const riskResults = new Map();
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -24,6 +28,8 @@ app.get('/health', (_req, res) => {
     hasAccount: Boolean(latestSnapshot?.account),
     hasQuote: Boolean(latestSnapshot?.quote),
     positionCount: Array.isArray(latestSnapshot?.positions) ? latestSnapshot.positions.length : 0,
+    pendingRiskCommands: pendingRiskCommands.size,
+    riskResultCount: riskResults.size,
     clients: getConnectedClientCount(),
     lastUpdate,
     lastTradingUpdate
@@ -58,6 +64,90 @@ app.post('/mt5/update', (req, res) => {
   console.log(`  broadcast clients: ${broadcastCount}`);
 
   res.json({ ok: true, clients: getConnectedClientCount(), broadcastCount });
+});
+
+app.post('/risk/calculate', (req, res) => {
+  cleanupRiskState();
+
+  const validation = validateRiskCalculationRequest(req.body);
+  if (!validation.ok) {
+    console.warn(`Rejected risk calculation request: ${validation.error}`);
+    res.status(400).json({ ok: false, error: validation.error });
+    return;
+  }
+
+  const command = {
+    type: 'CALCULATE_RISK_LOT',
+    requestId: req.body.requestId,
+    symbol: req.body.symbol,
+    side: req.body.side,
+    riskBasis: req.body.riskBasis,
+    riskMode: req.body.riskMode,
+    riskValue: req.body.riskValue,
+    entryPrice: req.body.entryPrice,
+    stopLossPrice: req.body.stopLossPrice,
+    queuedAt: new Date().toISOString(),
+    deliveredAt: null
+  };
+
+  pendingRiskCommands.set(command.requestId, command);
+  riskResults.delete(command.requestId);
+
+  console.log('Risk calculation command queued');
+  console.log(`  requestId: ${command.requestId}`);
+  console.log(`  symbol/side: ${command.symbol} ${command.side}`);
+
+  res.json({ ok: true, requestId: command.requestId, status: 'queued' });
+});
+
+app.get('/mt5/commands', (_req, res) => {
+  cleanupRiskState();
+
+  const now = new Date().toISOString();
+  const commands = [];
+
+  for (const command of pendingRiskCommands.values()) {
+    if (command.deliveredAt) {
+      continue;
+    }
+
+    command.deliveredAt = now;
+    commands.push(toMt5RiskCommand(command));
+  }
+
+  if (commands.length) {
+    console.log(`Delivered ${commands.length} MT5 command(s).`);
+  }
+
+  res.json({ commands });
+});
+
+app.post('/mt5/risk-result', (req, res) => {
+  cleanupRiskState();
+
+  const validation = validateRiskResult(req.body);
+  if (!validation.ok) {
+    console.warn(`Rejected MT5 risk result: ${validation.error}`);
+    res.status(400).json({ ok: false, error: validation.error });
+    return;
+  }
+
+  const result = {
+    ...req.body,
+    receivedAt: new Date().toISOString()
+  };
+
+  pendingRiskCommands.delete(result.requestId);
+  riskResults.set(result.requestId, result);
+
+  const sent = broadcastRiskResult(result);
+
+  console.log('MT5 risk result received');
+  console.log(`  requestId: ${result.requestId}`);
+  console.log(`  ok: ${result.ok}`);
+  console.log(`  broadcast clients: ${sent}`);
+
+  res.json({ ok: true, requestId: result.requestId, broadcastCount: sent });
 });
 
 app.use((err, _req, res, next) => {
@@ -184,6 +274,106 @@ function validateSnapshot(payload) {
 
     if (!candleValidation.ok) {
       return candleValidation;
+    }
+  }
+
+  return { ok: true };
+}
+
+function validateRiskCalculationRequest(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return invalid('Expected a JSON object risk calculation request.');
+  }
+
+  if (!isNonEmptyString(payload.requestId)) {
+    return invalid('requestId must be a non-empty string.');
+  }
+
+  if (!isNonEmptyString(payload.symbol)) {
+    return invalid('symbol must be a non-empty string.');
+  }
+
+  if (payload.side !== 'BUY' && payload.side !== 'SELL') {
+    return invalid('side must be BUY or SELL.');
+  }
+
+  if (payload.riskBasis !== 'EQUITY' && payload.riskBasis !== 'BALANCE') {
+    return invalid('riskBasis must be EQUITY or BALANCE.');
+  }
+
+  if (payload.riskMode !== 'PERCENT' && payload.riskMode !== 'FIXED') {
+    return invalid('riskMode must be PERCENT or FIXED.');
+  }
+
+  for (const field of ['riskValue', 'entryPrice', 'stopLossPrice']) {
+    if (!Number.isFinite(payload[field]) || payload[field] <= 0) {
+      return invalid(`${field} must be a positive number.`);
+    }
+  }
+
+  if (payload.side === 'BUY' && payload.stopLossPrice >= payload.entryPrice) {
+    return invalid('Stop-loss must be below entry for BUY.');
+  }
+
+  if (payload.side === 'SELL' && payload.stopLossPrice <= payload.entryPrice) {
+    return invalid('Stop-loss must be above entry for SELL.');
+  }
+
+  return { ok: true };
+}
+
+function validateRiskResult(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return invalid('Expected a JSON object risk result.');
+  }
+
+  if (payload.type !== 'RISK_LOT_RESULT') {
+    return invalid('risk result type must be RISK_LOT_RESULT.');
+  }
+
+  if (!isNonEmptyString(payload.requestId)) {
+    return invalid('risk result requestId must be a non-empty string.');
+  }
+
+  if (typeof payload.ok !== 'boolean') {
+    return invalid('risk result ok must be a boolean.');
+  }
+
+  if (!Array.isArray(payload.warnings)) {
+    return invalid('risk result warnings must be an array.');
+  }
+
+  if (!payload.ok) {
+    if (!isNonEmptyString(payload.error)) {
+      return invalid('failed risk result must include an error string.');
+    }
+
+    return { ok: true };
+  }
+
+  if (!isNonEmptyString(payload.symbol)) return invalid('risk result symbol must be a non-empty string.');
+  if (payload.side !== 'BUY' && payload.side !== 'SELL') return invalid('risk result side must be BUY or SELL.');
+  if (payload.riskBasis !== 'EQUITY' && payload.riskBasis !== 'BALANCE') return invalid('risk result riskBasis must be EQUITY or BALANCE.');
+  if (payload.riskMode !== 'PERCENT' && payload.riskMode !== 'FIXED') return invalid('risk result riskMode must be PERCENT or FIXED.');
+
+  for (const field of [
+    'riskValue',
+    'riskBasisAmount',
+    'riskAmount',
+    'entryPrice',
+    'stopLossPrice',
+    'stopDistancePoints',
+    'tickSize',
+    'tickValue',
+    'volumeMin',
+    'volumeMax',
+    'volumeStep',
+    'rawVolume',
+    'normalizedVolume',
+    'estimatedLoss'
+  ]) {
+    if (!Number.isFinite(payload[field])) {
+      return invalid(`risk result ${field} must be a number.`);
     }
   }
 
@@ -414,8 +604,59 @@ function broadcastSnapshot(snapshot) {
   return sent;
 }
 
+function broadcastRiskResult(result) {
+  let sent = 0;
+
+  for (const socket of wss.clients) {
+    if (socket.readyState === WebSocket.OPEN) {
+      sendJson(socket, {
+        type: 'riskResult',
+        payload: result
+      });
+      sent += 1;
+    }
+  }
+
+  return sent;
+}
+
 function sendJson(socket, message) {
   socket.send(JSON.stringify(message));
+}
+
+function toMt5RiskCommand(command) {
+  return {
+    type: command.type,
+    requestId: command.requestId,
+    symbol: command.symbol,
+    side: command.side,
+    riskBasis: command.riskBasis,
+    riskMode: command.riskMode,
+    riskValue: command.riskValue,
+    entryPrice: command.entryPrice,
+    stopLossPrice: command.stopLossPrice
+  };
+}
+
+function cleanupRiskState() {
+  const now = Date.now();
+
+  for (const [requestId, command] of pendingRiskCommands.entries()) {
+    if (ageMs(command.queuedAt, now) > RISK_COMMAND_TTL_MS) {
+      pendingRiskCommands.delete(requestId);
+    }
+  }
+
+  for (const [requestId, result] of riskResults.entries()) {
+    if (ageMs(result.receivedAt, now) > RISK_RESULT_TTL_MS) {
+      riskResults.delete(requestId);
+    }
+  }
+}
+
+function ageMs(isoDate, now) {
+  const timestamp = Date.parse(isoDate);
+  return Number.isFinite(timestamp) ? now - timestamp : Number.POSITIVE_INFINITY;
 }
 
 function getConnectedClientCount() {

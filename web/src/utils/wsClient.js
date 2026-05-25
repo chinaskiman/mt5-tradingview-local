@@ -1,6 +1,6 @@
 const RECONNECT_DELAY_MS = 1500;
 
-export function createDashboardSocket({ url, onOpen, onClose, onError, onReconnect, onSnapshot }) {
+export function createDashboardSocket({ url, onOpen, onClose, onError, onReconnect, onSnapshot, onRiskResult }) {
   let socket = null;
   let closedByClient = false;
   let reconnectTimer = null;
@@ -20,6 +20,14 @@ export function createDashboardSocket({ url, onOpen, onClose, onError, onReconne
 
       if (message?.type === 'snapshot') {
         onSnapshot?.(message.payload);
+      }
+
+      if (message?.type === 'riskResult') {
+        onRiskResult?.(message.payload);
+      }
+
+      if (message?.type === 'RISK_LOT_RESULT') {
+        onRiskResult?.(message);
       }
     });
 

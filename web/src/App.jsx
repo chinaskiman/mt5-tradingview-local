@@ -2,14 +2,29 @@ import { useEffect, useMemo, useState } from 'react';
 import TradingDashboard from './chart/TradingDashboard.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import IndicatorSettings from './components/IndicatorSettings.jsx';
+import RiskCalculator from './components/RiskCalculator.jsx';
 import TradingMonitor from './components/TradingMonitor.jsx';
 import { createDashboardSocket } from './utils/wsClient.js';
 
 const WS_URL = import.meta.env.VITE_DASHBOARD_WS_URL || 'ws://127.0.0.1:3001';
+const API_URL = import.meta.env.VITE_DASHBOARD_API_URL || wsToHttpUrl(WS_URL);
 const PREFS_KEY = 'mt5-dashboard-ui-preferences';
+const RISK_VERIFICATION_TIMEOUT_MS = 30000;
 const DEFAULT_PREFS = {
-  settingsCollapsed: false,
+  sidePanelOpen: true,
+  sidePanelActive: 'monitor',
   tradingMonitorFilter: 'current',
+  riskCalculator: {
+    riskBasis: 'equity',
+    riskMode: 'percent',
+    riskValue: 1,
+    orderSide: 'buy',
+    entryPriceMode: 'market',
+    manualEntryPrice: '',
+    stopLossMode: 'price',
+    stopLossPrice: '',
+    stopDistancePoints: 100
+  },
   autoScroll: true,
   layoutPreset: 'balanced',
   chartSpacing: 6,
@@ -41,6 +56,13 @@ export default function App() {
   const [backendStatus, setBackendStatus] = useState('Waiting for backend');
   const [snapshot, setSnapshot] = useState(null);
   const [lastBackendUpdateAt, setLastBackendUpdateAt] = useState(null);
+  const [riskVerification, setRiskVerification] = useState({
+    status: 'idle',
+    requestId: null,
+    requestSignature: null,
+    result: null,
+    error: null
+  });
   const [uiPrefs, setUiPrefs] = useState(() => loadPreferences());
 
   useEffect(() => {
@@ -68,6 +90,21 @@ export default function App() {
         setBackendStatus(Array.isArray(nextSnapshot?.candles) && nextSnapshot.candles.length > 0
           ? 'MT5 snapshot received'
           : 'Invalid MT5 payload: no candles in payload');
+      },
+      onRiskResult: (result) => {
+        setRiskVerification((current) => {
+          if (current.requestId && result?.requestId !== current.requestId) {
+            return current;
+          }
+
+          return {
+            ...current,
+            status: result?.ok ? 'verified' : 'failed',
+            requestId: result?.requestId || current.requestId,
+            result,
+            error: result?.ok ? null : result?.error || 'MT5 risk calculation failed.'
+          };
+        });
       }
     });
 
@@ -77,6 +114,29 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(PREFS_KEY, JSON.stringify(uiPrefs));
   }, [uiPrefs]);
+
+  useEffect(() => {
+    if (!['queued', 'waiting'].includes(riskVerification.status) || !riskVerification.requestId) {
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setRiskVerification((current) => {
+        if (current.requestId !== riskVerification.requestId || !['queued', 'waiting'].includes(current.status)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: 'failed',
+          result: null,
+          error: 'No MT5 verification response received. Check that the EA is running and command polling is enabled.'
+        };
+      });
+    }, RISK_VERIFICATION_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [riskVerification.status, riskVerification.requestId]);
 
   const meta = useMemo(() => ({
     symbol: snapshot?.symbol || '--',
@@ -138,6 +198,40 @@ export default function App() {
     }));
   }
 
+  async function requestRiskVerification(payload) {
+    const requestId = createRequestId();
+    const requestSignature = createRiskRequestSignature(payload);
+    const requestBody = {
+      ...payload,
+      requestId
+    };
+
+    setRiskVerification({ status: 'queued', requestId, requestSignature, result: null, error: null });
+
+    try {
+      const response = await fetch(`${API_URL}/risk/calculate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const body = await response.json().catch(() => null);
+
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.error || `Risk calculation request failed with HTTP ${response.status}`);
+      }
+
+      setRiskVerification({ status: 'waiting', requestId, requestSignature, result: null, error: null });
+    } catch (error) {
+      setRiskVerification({
+        status: 'failed',
+        requestId,
+        requestSignature,
+        result: null,
+        error: error instanceof Error ? error.message : 'Risk calculation request failed.'
+      });
+    }
+  }
+
   return (
     <main className="app-shell">
       <StatusBar
@@ -158,7 +252,7 @@ export default function App() {
         </div>
       ) : null}
 
-      <section className="workspace">
+      <section className={`workspace ${uiPrefs.sidePanelOpen ? '' : 'is-side-panel-collapsed'}`}>
         <TradingDashboard
           snapshot={snapshot}
           autoScroll={uiPrefs.autoScroll}
@@ -172,22 +266,42 @@ export default function App() {
           onPanelHeightsChange={updatePanelHeights}
           onTogglePanelCollapsed={togglePanelCollapsed}
         />
-        <aside className="side-panel-stack" aria-label="Dashboard side panels">
-          <TradingMonitor
-            snapshot={snapshot}
-            filter={uiPrefs.tradingMonitorFilter}
-            onFilterChange={(value) => updatePreference('tradingMonitorFilter', value)}
-          />
-          <IndicatorSettings
-            snapshot={snapshot}
-            collapsed={uiPrefs.settingsCollapsed}
-            chartSpacing={uiPrefs.chartSpacing}
-            visible={uiPrefs.visible}
-            onToggleCollapsed={() => updatePreference('settingsCollapsed', !uiPrefs.settingsCollapsed)}
-            onChartSpacingChange={(value) => updatePreference('chartSpacing', value)}
-            onVisibilityChange={updateVisibility}
-          />
-        </aside>
+        <SidePanel
+          open={uiPrefs.sidePanelOpen}
+          active={uiPrefs.sidePanelActive}
+          onToggleOpen={() => updatePreference('sidePanelOpen', !uiPrefs.sidePanelOpen)}
+          onActiveChange={(value) => setUiPrefs((current) => ({
+            ...current,
+            sidePanelOpen: true,
+            sidePanelActive: value
+          }))}
+        >
+          {uiPrefs.sidePanelActive === 'monitor' ? (
+            <TradingMonitor
+              snapshot={snapshot}
+              filter={uiPrefs.tradingMonitorFilter}
+              onFilterChange={(value) => updatePreference('tradingMonitorFilter', value)}
+            />
+          ) : null}
+          {uiPrefs.sidePanelActive === 'indicators' ? (
+            <IndicatorSettings
+              snapshot={snapshot}
+              chartSpacing={uiPrefs.chartSpacing}
+              visible={uiPrefs.visible}
+              onChartSpacingChange={(value) => updatePreference('chartSpacing', value)}
+              onVisibilityChange={updateVisibility}
+            />
+          ) : null}
+          {uiPrefs.sidePanelActive === 'risk' ? (
+            <RiskCalculator
+              snapshot={snapshot}
+              prefs={uiPrefs.riskCalculator}
+              onPrefsChange={(value) => updatePreference('riskCalculator', value)}
+              verification={riskVerification}
+              onVerify={requestRiskVerification}
+            />
+          ) : null}
+        </SidePanel>
       </section>
     </main>
   );
@@ -200,7 +314,10 @@ function loadPreferences() {
     return {
       ...DEFAULT_PREFS,
       ...parsed,
+      sidePanelOpen: parsed?.sidePanelOpen !== false,
+      sidePanelActive: normalizeSidePanelActive(parsed?.sidePanelActive),
       tradingMonitorFilter: normalizeTradingMonitorFilter(parsed?.tradingMonitorFilter),
+      riskCalculator: normalizeRiskCalculatorPrefs(parsed?.riskCalculator),
       autoScroll: parsed?.autoScroll !== false,
       layoutPreset: normalizeLayoutPreset(parsed?.layoutPreset),
       chartSpacing: clamp(Number(parsed?.chartSpacing), 3, 14),
@@ -227,6 +344,26 @@ function normalizeTradingMonitorFilter(value) {
   return ['current', 'all'].includes(value) ? value : DEFAULT_PREFS.tradingMonitorFilter;
 }
 
+function normalizeSidePanelActive(value) {
+  return ['monitor', 'indicators', 'risk'].includes(value) ? value : DEFAULT_PREFS.sidePanelActive;
+}
+
+function normalizeRiskCalculatorPrefs(value) {
+  const defaults = DEFAULT_PREFS.riskCalculator;
+
+  return {
+    riskBasis: ['equity', 'balance'].includes(value?.riskBasis) ? value.riskBasis : defaults.riskBasis,
+    riskMode: ['percent', 'fixed'].includes(value?.riskMode) ? value.riskMode : defaults.riskMode,
+    riskValue: normalizePositiveInput(value?.riskValue, defaults.riskValue),
+    orderSide: ['buy', 'sell'].includes(value?.orderSide) ? value.orderSide : defaults.orderSide,
+    entryPriceMode: ['market', 'manual'].includes(value?.entryPriceMode) ? value.entryPriceMode : defaults.entryPriceMode,
+    manualEntryPrice: normalizeTextInput(value?.manualEntryPrice),
+    stopLossMode: ['price', 'points'].includes(value?.stopLossMode) ? value.stopLossMode : defaults.stopLossMode,
+    stopLossPrice: normalizeTextInput(value?.stopLossPrice),
+    stopDistancePoints: normalizePositiveInput(value?.stopDistancePoints, defaults.stopDistancePoints)
+  };
+}
+
 function normalizePanelHeights(value) {
   return {
     price: clamp(Number(value?.price), 250, 1200, DEFAULT_PREFS.panelHeights.price),
@@ -242,4 +379,79 @@ function clamp(value, min, max, fallback = DEFAULT_PREFS.chartSpacing) {
   }
 
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizePositiveInput(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function normalizeTextInput(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value);
+}
+
+function wsToHttpUrl(url) {
+  return url.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
+}
+
+function createRequestId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `risk-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createRiskRequestSignature(payload) {
+  return JSON.stringify({
+    symbol: payload.symbol,
+    side: payload.side,
+    riskBasis: payload.riskBasis,
+    riskMode: payload.riskMode,
+    riskValue: payload.riskValue,
+    entryPrice: payload.entryPrice,
+    stopLossPrice: payload.stopLossPrice
+  });
+}
+
+function SidePanel({ open, active, onToggleOpen, onActiveChange, children }) {
+  const tabs = [
+    ['monitor', 'Trading Monitor', 'Monitor'],
+    ['indicators', 'Indicators', 'Ind'],
+    ['risk', 'Risk Calculator', 'Risk']
+  ];
+
+  return (
+    <aside className={`side-panel ${open ? '' : 'is-collapsed'}`} aria-label="Dashboard side panel">
+      <div className="side-panel-tabs" role="tablist" aria-label="Dashboard sections">
+        <button
+          type="button"
+          className="side-panel-toggle"
+          onClick={onToggleOpen}
+          title={open ? 'Close side panel' : 'Open side panel'}
+          aria-label={open ? 'Close side panel' : 'Open side panel'}
+        >
+          {open ? '>' : '<'}
+        </button>
+        {tabs.map(([key, label, shortLabel]) => (
+          <button
+            key={key}
+            type="button"
+            className={`side-panel-tab ${active === key ? 'is-active' : ''}`}
+            onClick={() => onActiveChange(key)}
+            role="tab"
+            aria-selected={active === key}
+            title={label}
+          >
+            {open ? label : shortLabel}
+          </button>
+        ))}
+      </div>
+      {open ? <div className="side-panel-content">{children}</div> : null}
+    </aside>
+  );
 }
