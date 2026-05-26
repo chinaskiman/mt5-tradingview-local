@@ -592,3 +592,35 @@
 - Result: Web production build passed. Backend syntax check passed. Backend V3D smoke test passed. Static searches showed only intended gate/command references and documented absence of bulk/trailing/automated management. Diff check had only expected CRLF warnings. Port `3001` was free after the smoke test.
 - Known issues: The full V3D broker checklist still requires manual demo-account execution in MT5.
 - Next steps: Run the README V3D manual checklist on a demo account, starting with backend disabled, then EA disabled, then enabled management one action at a time.
+
+## 2026-05-26 - Added MT5-calculated S/R + ATR Buffer overlay
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `server/server.js`, `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/components/IndicatorSettings.jsx`, `web/src/utils/chartColors.js`, `README.md`, `server/README.md`, `PROJECT_LOG.md`; external MT5 data-folder copy `C:\Users\chinaski\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Experts\MT5_Dashboard_Bridge.mq5`; external compiled EA `...\MT5_Dashboard_Bridge.ex5`
+- What changed: Added EA inputs and MT5-side calculation for S/R + ATR Buffer using closed source-timeframe candles only. Defaults are lookback `14`, source timeframe `H4`, ATR length `14`, and ATR multiplier `0.20`. The EA now sends `settings.sr` plus nullable per-candle fields for resistance, support, and upper/lower ATR buffer lines. Backend validation accepts the new fields. Frontend price chart renders the new overlay lines and exposes browser hide/show toggles in Indicators.
+- Why: The dashboard needs to mirror the Pine script S/R + ATR Buffer logic while keeping indicator calculations in MT5 and preserving existing backend/trading behavior.
+- Decisions: No trading, risk, order placement, or trade-management logic was changed. Source-timeframe selection is an EA input, not a browser selector. If the S/R indicator, individual display flags, source data, or ATR data are unavailable, the EA sends `null` values.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; MetaEditor compile of the installed MT5 EA copy; backend smoke test posting a snapshot with the new S/R fields; static search for S/R payload fields/settings; `git diff --check`; local port cleanup check.
+- Result: Web production build passed. Backend syntax check passed. MetaEditor compiled with `0 errors, 0 warnings`. Backend accepted an MT5 snapshot containing S/R + ATR Buffer fields. Diff check had only expected CRLF warnings. Port `3001` was free after smoke testing.
+- Known issues: Visual confirmation with live MT5 H4 source data is still needed after reattaching/restarting the EA.
+- Next steps: In MT5, reattach/restart the EA so the new compiled `.ex5` loads, then confirm `settings.sr` and S/R buffer lines appear on the price chart. Toggle the S/R rows in the browser Indicators panel and verify only local visibility changes.
+
+## 2026-05-26 - Hardened S/R display and backend validation
+
+- Files changed: `server/server.js`, `server/README.md`, `web/src/chart/TradingDashboard.jsx`, `web/src/components/IndicatorSettings.jsx`, `PROJECT_LOG.md`
+- What changed: Added explicit backend S/R data detection for `/health` and MT5 update logs, accepted both `showResistance`/`showSupport` and existing EA `showOriginalResistance`/`showOriginalSupport` settings aliases, rendered S/R overlay series with native stepped line behavior, and added S/R buffer values to the price crosshair readout using matching line colors.
+- Why: The S/R + ATR Buffer indicator should be backend-compatible, visible on the price chart, locally toggleable in the Indicators panel, and inspectable at the crosshair without frontend-side calculation.
+- Decisions: Backend still only validates and relays MT5-sent S/R values. Frontend toggles are display-only and stored locally. No trading endpoints, risk logic, order placement, or trade-management code was changed.
+- Tests/checks run: `node --check server.js`; `npm run build` in `web`; backend smoke test posting a sample MT5 snapshot with `settings.sr` and S/R candle fields; `git diff --check`.
+- Result: Backend syntax check passed. Web production build passed. Backend accepted the S/R snapshot and `/health` reported `hasSRSettings: true` and `hasSRData: true`. Diff check had only expected CRLF warnings.
+- Known issues: Live visual verification with the running MT5 EA is still needed.
+- Next steps: Restart backend/frontend, reattach the EA in MT5, then confirm S/R, buffer lines, Indicators toggles, and crosshair values on the price chart.
+
+## 2026-05-26 - Tested and documented S/R + ATR Buffer
+
+- Files changed: `README.md`, `PROJECT_LOG.md`; external MT5 data-folder copy `C:\Users\chinaski\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Experts\MT5_Dashboard_Bridge.mq5`; external compiled EA `...\MT5_Dashboard_Bridge.ex5`
+- What changed: Expanded README documentation with the S/R + ATR Buffer calculation rules, MT5 inputs, frontend visibility toggles, closed-candle/no-lookahead behavior, and the limitation that settings remain MT5-controlled. Added S/R-specific manual checks to the dashboard checklist.
+- Why: The S/R indicator needs documented parity with the Pine logic and a clear operator test path before live MT5 visual verification.
+- Tests/checks run: MetaEditor compile of the installed MT5 EA copy; `node --check server.js`; `npm run build` in `web`; backend smoke test posting a sample payload with `settings.sr` and S/R candle fields; static search for S/R calculation and rendering paths; `git diff --check`.
+- Result: EA compiled with `0 errors, 0 warnings`. Backend syntax check passed. Web production build passed. Backend accepted the S/R payload and `/health` reported `hasSRSettings: true` and `hasSRData: true`. Static search confirmed S/R pattern and ATR buffer calculations are in MT5 and frontend uses stepped render series. Diff check had only expected CRLF warnings.
+- Known issues: Browser visual checks against live MT5 data still need to be run manually: S/R line visibility, persisted toggles, crosshair values, and existing chart/trading workflows.
+- Next steps: Restart backend/frontend, reattach the compiled EA in MT5, and run the updated README checklist with live EURUSD M15 data.

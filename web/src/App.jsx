@@ -60,7 +60,11 @@ const DEFAULT_PREFS = {
     adx: true,
     diPlus: true,
     diMinus: true,
-    rsi: true
+    rsi: true,
+    srResistance: true,
+    srSupport: true,
+    srResistanceBuffer: true,
+    srSupportBuffer: true
   },
   collapsedPanels: {
     atr: false,

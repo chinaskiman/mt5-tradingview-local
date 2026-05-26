@@ -20,7 +20,7 @@ The dashboard scope is deliberately narrow:
 MetaTrader 5 chart
   attached EA: mt5/MT5_Dashboard_Bridge.mq5
   uses _Symbol and _Period only
-  calculates SMA, ATR, ADX, DI+, DI- and RSI
+  calculates SMA, ATR, ADX, DI+, DI-, RSI, and S/R + ATR Buffer
   sends closed candles only
   sends read-only account, quote, open position, and pending order monitor data
   polls local command queue for risk verification and gated order placement
@@ -41,7 +41,7 @@ Node.js local bridge
 React browser dashboard
   web/src/*
   Vite app at http://127.0.0.1:5173
-  Lightweight Charts renders price, ATR, ADX/DI, and RSI panels
+  Lightweight Charts renders price overlays plus ATR, ADX/DI, and RSI panels
 
 Risk calculator verification:
   React POST /risk/calculate -> backend queue
@@ -195,6 +195,45 @@ The page auto-reconnects if the backend is unavailable or the WebSocket disconne
 The dashboard symbol and timeframe come from the attached chart. V1 intentionally has no browser-side symbol or timeframe picker.
 
 The MT5 EA inputs control which indicators are calculated. The browser settings panel can hide or show already-received chart layers locally, but it does not send indicator changes back to MT5 in V1. Oscillator panels can also be collapsed to a compact row that keeps the latest MT5-sent value visible; click a compact row to expand it again. The chart toolbar controls browser view only: auto-scroll, fit content, go to latest, reset view, panel height presets, and saved panel heights.
+
+The price chart can also display the MT5-calculated `S/R + ATR Buffer` overlay. Defaults are lookback `14`, source timeframe `H4`, ATR length `14`, and ATR multiplier `0.20`. The EA uses only closed source-timeframe candles and sends `resistance`, `support`, and their upper/lower ATR buffer values as nullable candle fields.
+
+## S/R + ATR Buffer
+
+This overlay is calculated in MT5, not in the browser. The frontend only displays the values already present on each candle.
+
+Calculation logic:
+
+- Source timeframe default: `H4`.
+- Lookback default: `14` closed source-timeframe candles.
+- ATR buffer default: `ATR(14) * 0.20`.
+- Resistance pattern: a bullish source candle followed by a bearish source candle. From valid patterns inside the lookback, the EA picks the pattern with the highest previous bullish close. The resistance level is the following bearish candle's open.
+- Support pattern: a bearish source candle followed by a bullish source candle. From valid patterns inside the lookback, the EA picks the pattern with the lowest previous bearish close. The support level is the following bullish candle's open.
+- Buffer lines:
+  - Resistance upper/lower: `resistance +/- buffer`.
+  - Support upper/lower: `support +/- buffer`.
+- Closed candles only: the EA does not use the currently forming chart candle or the currently forming source-timeframe candle. There is no lookahead.
+
+MT5 EA inputs:
+
+- `EnableSRIndicator`
+- `SRLookbackCandles`
+- `SRSourceTimeframe`
+- `SRATRLength`
+- `SRATRMultiplier`
+- `ShowOriginalResistance`
+- `ShowOriginalSupport`
+- `ShowResistanceBuffer`
+- `ShowSupportBuffer`
+
+Frontend display controls:
+
+- `Resistance`
+- `Support`
+- `Resistance buffer`
+- `Support buffer`
+
+These browser controls are visibility toggles only and are saved in `localStorage`. They do not change MT5 inputs, do not change backend payloads, and do not calculate replacement values. To change the S/R logic, edit the EA inputs in MT5 and reattach/restart the EA.
 
 ## V2B Chart Controls
 
@@ -883,10 +922,13 @@ npm run dev
 19. Turn `Auto-scroll OFF`, scroll back, wait for the next MT5 snapshot, and confirm the visible range does not jump.
 20. Turn `Auto-scroll ON`, then confirm new MT5 snapshots keep the chart at the latest candle.
 21. Click `Fit content`, `Go to latest`, and `Reset view`, and confirm all chart panels move together.
-22. Use the browser indicator toggles to hide/show SMA, ATR, ADX, DI, and RSI layers.
-23. Change EA inputs for indicator lengths or enabled state.
-24. Reattach or restart the EA.
-25. Confirm the frontend receives the new settings and values.
+22. Use the browser indicator toggles to hide/show SMA, S/R + ATR Buffer, ATR, ADX, DI, and RSI layers.
+23. Confirm Resistance, Support, and buffer lines appear as horizontal/step levels on the price chart when MT5 sends non-null S/R values.
+24. Move the crosshair over historical candles and confirm the price readout shows S/R values with text colors matching the S/R line colors.
+25. Refresh the browser and confirm the S/R visibility toggles are restored.
+26. Change EA inputs for indicator lengths, S/R settings, or enabled state.
+27. Reattach or restart the EA.
+28. Confirm the frontend receives the new settings and values.
 
 ## Troubleshooting
 
@@ -915,6 +957,7 @@ npm run dev
 - V3D supports only individual position/order management actions. No bulk close, bulk cancel, trailing stop, or automated management exists.
 - V3D pending order modification currently supports only supported pending order types, primarily Buy Limit and Sell Limit.
 - Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
+- S/R + ATR Buffer settings are controlled from the MT5 EA inputs; the frontend only displays or locally hides/shows the MT5-sent lines.
 - Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.
 - Panel height presets and dragged panel heights are browser-local UI preferences.
 - Auto-scroll and chart view controls are browser-local preferences/actions.
@@ -930,6 +973,6 @@ npm run dev
 - Symbol/timeframe selector.
 - Unfinished live candle mode.
 - Alerts.
-- Support/resistance.
+- Advanced support/resistance tools.
 - Account/position risk tools.
 - Packaged Windows `.exe`.

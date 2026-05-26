@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ColorType, CrosshairMode, createChart } from 'lightweight-charts';
+import { ColorType, CrosshairMode, LineType, createChart } from 'lightweight-charts';
 import { CHART_COLORS, INDICATOR_COLORS } from '../utils/chartColors.js';
 
 const PRICE_FORMAT = {
@@ -174,6 +174,12 @@ export default function TradingDashboard({
     const smaFastSeries = priceChart.addLineSeries(lineOptions(INDICATOR_COLORS.smaFast, 1));
     const smaMidSeries = priceChart.addLineSeries(lineOptions(INDICATOR_COLORS.smaMid, 1));
     const smaSlowSeries = priceChart.addLineSeries(lineOptions(INDICATOR_COLORS.smaSlow, 1));
+    const resistanceSeries = priceChart.addLineSeries(srLineOptions(INDICATOR_COLORS.resistance, 2));
+    const supportSeries = priceChart.addLineSeries(srLineOptions(INDICATOR_COLORS.support, 2));
+    const resistanceUpperBufferSeries = priceChart.addLineSeries(srLineOptions(INDICATOR_COLORS.resistanceBuffer, 1));
+    const resistanceLowerBufferSeries = priceChart.addLineSeries(srLineOptions(INDICATOR_COLORS.resistanceBuffer, 1));
+    const supportUpperBufferSeries = priceChart.addLineSeries(srLineOptions(INDICATOR_COLORS.supportBuffer, 1));
+    const supportLowerBufferSeries = priceChart.addLineSeries(srLineOptions(INDICATOR_COLORS.supportBuffer, 1));
     const atrSeries = atrChart.addLineSeries(lineOptions(INDICATOR_COLORS.atr, 2));
     const adxSeries = adxChart.addLineSeries(lineOptions(INDICATOR_COLORS.adx, 2));
     const plusDISeries = adxChart.addLineSeries(lineOptions(INDICATOR_COLORS.diPlus, 1));
@@ -198,6 +204,12 @@ export default function TradingDashboard({
         smaFastSeries,
         smaMidSeries,
         smaSlowSeries,
+        resistanceSeries,
+        supportSeries,
+        resistanceUpperBufferSeries,
+        resistanceLowerBufferSeries,
+        supportUpperBufferSeries,
+        supportLowerBufferSeries,
         atrSeries,
         adxSeries,
         plusDISeries,
@@ -309,6 +321,12 @@ export default function TradingDashboard({
     chartsState.series.smaFastSeries.setData(isEnabled(settings.smaFast) && isVisible(visible, 'smaFast') ? seriesData.smaFast : []);
     chartsState.series.smaMidSeries.setData(isEnabled(settings.smaMid) && isVisible(visible, 'smaMid') ? seriesData.smaMid : []);
     chartsState.series.smaSlowSeries.setData(isEnabled(settings.smaSlow) && isVisible(visible, 'smaSlow') ? seriesData.smaSlow : []);
+    chartsState.series.resistanceSeries.setData(isSRVisible(settings.sr, visible, 'srResistance', 'showOriginalResistance') ? seriesData.resistance : []);
+    chartsState.series.supportSeries.setData(isSRVisible(settings.sr, visible, 'srSupport', 'showOriginalSupport') ? seriesData.support : []);
+    chartsState.series.resistanceUpperBufferSeries.setData(isSRVisible(settings.sr, visible, 'srResistanceBuffer', 'showResistanceBuffer') ? seriesData.resistanceUpperBuffer : []);
+    chartsState.series.resistanceLowerBufferSeries.setData(isSRVisible(settings.sr, visible, 'srResistanceBuffer', 'showResistanceBuffer') ? seriesData.resistanceLowerBuffer : []);
+    chartsState.series.supportUpperBufferSeries.setData(isSRVisible(settings.sr, visible, 'srSupportBuffer', 'showSupportBuffer') ? seriesData.supportUpperBuffer : []);
+    chartsState.series.supportLowerBufferSeries.setData(isSRVisible(settings.sr, visible, 'srSupportBuffer', 'showSupportBuffer') ? seriesData.supportLowerBuffer : []);
     chartsState.series.atrSeries.setData(isEnabled(settings.atr) && isVisible(visible, 'atr') ? seriesData.atr : []);
     chartsState.series.adxSeries.setData(isEnabled(settings.adx) && isVisible(visible, 'adx') ? seriesData.adx : []);
     chartsState.series.plusDISeries.setData(isEnabled(settings.di) && isVisible(visible, 'diPlus') ? seriesData.plusDI : []);
@@ -411,7 +429,7 @@ export default function TradingDashboard({
           id="price"
           title="Price"
           subtitle={priceLegend(settings, visible, displayedValues)}
-          crosshairReadout={showCrosshairReadouts ? priceCrosshairReadout(displayedValues) : null}
+          crosshairReadout={showCrosshairReadouts ? priceCrosshairReadout(settings, visible, displayedValues) : null}
           hostRef={priceRef}
           crosshairRef={priceCrosshairRef}
           isEmpty={!hasSnapshot || !seriesData.candles.length}
@@ -1070,6 +1088,13 @@ function lineOptions(color, lineWidth) {
   };
 }
 
+function srLineOptions(color, lineWidth) {
+  return {
+    ...lineOptions(color, lineWidth),
+    lineType: LineType.WithSteps
+  };
+}
+
 function syncSeriesOptions() {
   return {
     color: 'rgba(0, 0, 0, 0)',
@@ -1116,6 +1141,12 @@ function normalizeSnapshot(snapshot) {
   const plusDI = normalizeLine(snapshot?.candles, 'diPlus');
   const minusDI = normalizeLine(snapshot?.candles, 'diMinus');
   const rsi = normalizeLine(snapshot?.candles, 'rsi');
+  const resistance = normalizeLine(snapshot?.candles, 'resistance');
+  const support = normalizeLine(snapshot?.candles, 'support');
+  const resistanceUpperBuffer = normalizeLine(snapshot?.candles, 'resistanceUpperBuffer');
+  const resistanceLowerBuffer = normalizeLine(snapshot?.candles, 'resistanceLowerBuffer');
+  const supportUpperBuffer = normalizeLine(snapshot?.candles, 'supportUpperBuffer');
+  const supportLowerBuffer = normalizeLine(snapshot?.candles, 'supportLowerBuffer');
 
   return {
     candles,
@@ -1128,6 +1159,12 @@ function normalizeSnapshot(snapshot) {
     plusDI,
     minusDI,
     rsi,
+    resistance,
+    support,
+    resistanceUpperBuffer,
+    resistanceLowerBuffer,
+    supportUpperBuffer,
+    supportLowerBuffer,
     latest: {
       close: latestValue(candles, 'close'),
       smaFast: latestValue(smaFast, 'value'),
@@ -1137,7 +1174,13 @@ function normalizeSnapshot(snapshot) {
       adx: latestValue(adx, 'value'),
       plusDI: latestValue(plusDI, 'value'),
       minusDI: latestValue(minusDI, 'value'),
-      rsi: latestValue(rsi, 'value')
+      rsi: latestValue(rsi, 'value'),
+      resistance: latestValue(resistance, 'value'),
+      support: latestValue(support, 'value'),
+      resistanceUpperBuffer: latestValue(resistanceUpperBuffer, 'value'),
+      resistanceLowerBuffer: latestValue(resistanceLowerBuffer, 'value'),
+      supportUpperBuffer: latestValue(supportUpperBuffer, 'value'),
+      supportLowerBuffer: latestValue(supportLowerBuffer, 'value')
     },
     lookup: {
       price: createLookup(candles, 'close'),
@@ -1148,7 +1191,13 @@ function normalizeSnapshot(snapshot) {
       adx: createLookup(adx, 'value'),
       plusDI: createLookup(plusDI, 'value'),
       minusDI: createLookup(minusDI, 'value'),
-      rsi: createLookup(rsi, 'value')
+      rsi: createLookup(rsi, 'value'),
+      resistance: createLookup(resistance, 'value'),
+      support: createLookup(support, 'value'),
+      resistanceUpperBuffer: createLookup(resistanceUpperBuffer, 'value'),
+      resistanceLowerBuffer: createLookup(resistanceLowerBuffer, 'value'),
+      supportUpperBuffer: createLookup(supportUpperBuffer, 'value'),
+      supportLowerBuffer: createLookup(supportLowerBuffer, 'value')
     }
   };
 }
@@ -1236,12 +1285,35 @@ function isVisible(visible, key) {
   return visible?.[key] !== false;
 }
 
+function isSRVisible(setting, visible, visibleKey, settingKey) {
+  return isEnabled(setting) && srSettingFlagEnabled(setting, settingKey) && isVisible(visible, visibleKey);
+}
+
+function srSettingFlagEnabled(setting, settingKey) {
+  const aliases = {
+    showOriginalResistance: ['showOriginalResistance', 'showResistance'],
+    showOriginalSupport: ['showOriginalSupport', 'showSupport']
+  };
+
+  const keys = aliases[settingKey] || [settingKey];
+
+  for (const key of keys) {
+    if (setting?.[key] !== undefined) {
+      return setting[key] !== false;
+    }
+  }
+
+  return true;
+}
+
 function priceLegend(settings, visible, values) {
   const labels = [];
 
   if (isEnabled(settings.smaFast) && isVisible(visible, 'smaFast')) labels.push(`SMA Fast ${formatValue(values.smaFast)}`);
   if (isEnabled(settings.smaMid) && isVisible(visible, 'smaMid')) labels.push(`SMA Mid ${formatValue(values.smaMid)}`);
   if (isEnabled(settings.smaSlow) && isVisible(visible, 'smaSlow')) labels.push(`SMA Slow ${formatValue(values.smaSlow)}`);
+  if (isSRVisible(settings.sr, visible, 'srResistance', 'showOriginalResistance')) labels.push(`R ${formatValue(values.resistance)}`);
+  if (isSRVisible(settings.sr, visible, 'srSupport', 'showOriginalSupport')) labels.push(`S ${formatValue(values.support)}`);
 
   const close = formatValue(values.close);
   const layerText = labels.length ? labels.join(' / ') : 'Candles only';
@@ -1253,8 +1325,38 @@ function indicatorLegend(setting, label, value) {
   return isEnabled(setting) ? `${label} ${formatValue(value)}` : `${label} disabled in MT5`;
 }
 
-function priceCrosshairReadout(values) {
-  return <span>{`Close ${formatValue(values.close)}`}</span>;
+function priceCrosshairReadout(settings, visible, values) {
+  const extras = [];
+
+  if (isSRVisible(settings.sr, visible, 'srResistance', 'showOriginalResistance')) {
+    extras.push({ key: 'resistance', color: INDICATOR_COLORS.resistance, text: `R ${formatValue(values.resistance)}` });
+  }
+
+  if (isSRVisible(settings.sr, visible, 'srSupport', 'showOriginalSupport')) {
+    extras.push({ key: 'support', color: INDICATOR_COLORS.support, text: `S ${formatValue(values.support)}` });
+  }
+
+  if (isSRVisible(settings.sr, visible, 'srResistanceBuffer', 'showResistanceBuffer')) {
+    extras.push({ key: 'resistanceUpperBuffer', color: INDICATOR_COLORS.resistanceBuffer, text: `R+ ${formatValue(values.resistanceUpperBuffer)}` });
+    extras.push({ key: 'resistanceLowerBuffer', color: INDICATOR_COLORS.resistanceBuffer, text: `R- ${formatValue(values.resistanceLowerBuffer)}` });
+  }
+
+  if (isSRVisible(settings.sr, visible, 'srSupportBuffer', 'showSupportBuffer')) {
+    extras.push({ key: 'supportUpperBuffer', color: INDICATOR_COLORS.supportBuffer, text: `S+ ${formatValue(values.supportUpperBuffer)}` });
+    extras.push({ key: 'supportLowerBuffer', color: INDICATOR_COLORS.supportBuffer, text: `S- ${formatValue(values.supportLowerBuffer)}` });
+  }
+
+  return (
+    <>
+      <span>{`Close ${formatValue(values.close)}`}</span>
+      {extras.map((item) => (
+        <Fragment key={item.key}>
+          <span className="legend-separator"> / </span>
+          <span style={{ color: item.color }}>{item.text}</span>
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 function indicatorCrosshairReadout(setting, label, value, color) {
@@ -1329,7 +1431,13 @@ function valuesAtTime(seriesData, time) {
     adx: lookup.adx.get(time) ?? null,
     plusDI: lookup.plusDI.get(time) ?? null,
     minusDI: lookup.minusDI.get(time) ?? null,
-    rsi: lookup.rsi.get(time) ?? null
+    rsi: lookup.rsi.get(time) ?? null,
+    resistance: lookup.resistance.get(time) ?? null,
+    support: lookup.support.get(time) ?? null,
+    resistanceUpperBuffer: lookup.resistanceUpperBuffer.get(time) ?? null,
+    resistanceLowerBuffer: lookup.resistanceLowerBuffer.get(time) ?? null,
+    supportUpperBuffer: lookup.supportUpperBuffer.get(time) ?? null,
+    supportLowerBuffer: lookup.supportLowerBuffer.get(time) ?? null
   };
 }
 

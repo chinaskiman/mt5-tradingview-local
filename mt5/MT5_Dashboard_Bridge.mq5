@@ -59,6 +59,15 @@ input bool EnableDI      = true;
 input int  DILength      = 14;
 input bool EnableRSI     = true;
 input int  RSILength     = 14;
+input bool EnableSRIndicator = true;
+input int  SRLookbackCandles = 14;
+input ENUM_TIMEFRAMES SRSourceTimeframe = PERIOD_H4;
+input int  SRATRLength = 14;
+input double SRATRMultiplier = 0.20;
+input bool ShowOriginalResistance = true;
+input bool ShowOriginalSupport = true;
+input bool ShowResistanceBuffer = true;
+input bool ShowSupportBuffer = true;
 
 const string STATUS_LABEL_PREFIX = "MT5_Dashboard_Bridge_Status_";
 const string LEGACY_STATUS_LABEL_NAME = "MT5_Dashboard_Bridge_Status";
@@ -71,6 +80,7 @@ int atrHandle     = INVALID_HANDLE;
 int adxHandle     = INVALID_HANDLE;
 int diHandle      = INVALID_HANDLE;
 int rsiHandle     = INVALID_HANDLE;
+int srAtrHandle   = INVALID_HANDLE;
 
 datetime lastAttemptedClosedTime = 0;
 bool sendOnStartup = true;
@@ -112,6 +122,16 @@ struct TradeManagementCommand
    double offsetPoints;
 };
 
+struct SRLevels
+{
+   bool hasResistance;
+   bool hasSupport;
+   bool hasAtr;
+   double resistance;
+   double support;
+   double buffer;
+};
+
 int OnInit()
 {
    CreateStatusLabel();
@@ -128,6 +148,27 @@ int OnInit()
    {
       Print("UpdateSeconds must be greater than 0.");
       UpdateStatusLabel("Input error: UpdateSeconds must be greater than 0", clrTomato);
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+
+   if(EnableSRIndicator && SRLookbackCandles < 3)
+   {
+      Print("SRLookbackCandles must be at least 3.");
+      UpdateStatusLabel("Input error: SRLookbackCandles must be at least 3", clrTomato);
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+
+   if(EnableSRIndicator && SRATRLength < 1)
+   {
+      Print("SRATRLength must be greater than 0.");
+      UpdateStatusLabel("Input error: SRATRLength must be greater than 0", clrTomato);
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+
+   if(EnableSRIndicator && SRATRMultiplier < 0.0)
+   {
+      Print("SRATRMultiplier must be 0 or greater.");
+      UpdateStatusLabel("Input error: SRATRMultiplier must be 0 or greater", clrTomato);
       return(INIT_PARAMETERS_INCORRECT);
    }
 
@@ -217,6 +258,13 @@ bool CreateIndicatorHandles()
          return PrintHandleError("RSI", RSILength);
    }
 
+   if(EnableSRIndicator)
+   {
+      srAtrHandle = iATR(_Symbol, SRSourceTimeframe, SRATRLength);
+      if(srAtrHandle == INVALID_HANDLE)
+         return PrintHandleError("S/R ATR", SRATRLength);
+   }
+
    return true;
 }
 
@@ -235,6 +283,7 @@ void ReleaseIndicatorHandles()
    if(adxHandle     != INVALID_HANDLE) IndicatorRelease(adxHandle);
    if(diHandle      != INVALID_HANDLE) IndicatorRelease(diHandle);
    if(rsiHandle     != INVALID_HANDLE) IndicatorRelease(rsiHandle);
+   if(srAtrHandle   != INVALID_HANDLE) IndicatorRelease(srAtrHandle);
 }
 
 void SendIfNeeded()
@@ -325,7 +374,18 @@ string BuildSnapshotJson(const datetime newestClosedTime, const bool chartUpdate
    json += "\"atr\":{\"enabled\":" + JsonBool(EnableATR) + ",\"length\":" + IntegerToString(ATRLength) + "},";
    json += "\"adx\":{\"enabled\":" + JsonBool(EnableADX) + ",\"length\":" + IntegerToString(ADXLength) + "},";
    json += "\"di\":{\"enabled\":" + JsonBool(EnableDI) + ",\"length\":" + IntegerToString(DILength) + "},";
-   json += "\"rsi\":{\"enabled\":" + JsonBool(EnableRSI) + ",\"length\":" + IntegerToString(RSILength) + "}";
+   json += "\"rsi\":{\"enabled\":" + JsonBool(EnableRSI) + ",\"length\":" + IntegerToString(RSILength) + "},";
+   json += "\"sr\":{";
+   json += "\"enabled\":" + JsonBool(EnableSRIndicator) + ",";
+   json += "\"lookback\":" + IntegerToString(SRLookbackCandles) + ",";
+   json += "\"sourceTimeframe\":" + JsonString(TimeframeToString(SRSourceTimeframe)) + ",";
+   json += "\"atrLength\":" + IntegerToString(SRATRLength) + ",";
+   json += "\"atrMultiplier\":" + JsonNumber(SRATRMultiplier, 5) + ",";
+   json += "\"showOriginalResistance\":" + JsonBool(ShowOriginalResistance) + ",";
+   json += "\"showOriginalSupport\":" + JsonBool(ShowOriginalSupport) + ",";
+   json += "\"showResistanceBuffer\":" + JsonBool(ShowResistanceBuffer) + ",";
+   json += "\"showSupportBuffer\":" + JsonBool(ShowSupportBuffer);
+   json += "}";
    json += "},";
 
    if(chartUpdated)
@@ -349,8 +409,17 @@ string BuildSnapshotJson(const datetime newestClosedTime, const bool chartUpdate
          json += "\"atr\":" + JsonBufferNumber(EnableATR, atrValues, atrCopied, i, JSON_DECIMALS) + ",";
          json += "\"adx\":" + JsonBufferNumber(EnableADX, adxValues, adxCopied, i, JSON_DECIMALS) + ",";
          json += "\"diPlus\":" + JsonBufferNumber(EnableDI, diPlusValues, diPlusCopied, i, JSON_DECIMALS) + ",";
+         SRLevels srLevels;
+         bool srAvailable = CalculateSRLevelsForChartCandle(rates[i].time, srLevels);
+
          json += "\"diMinus\":" + JsonBufferNumber(EnableDI, diMinusValues, diMinusCopied, i, JSON_DECIMALS) + ",";
-         json += "\"rsi\":" + JsonBufferNumber(EnableRSI, rsiValues, rsiCopied, i, JSON_DECIMALS);
+         json += "\"rsi\":" + JsonBufferNumber(EnableRSI, rsiValues, rsiCopied, i, JSON_DECIMALS) + ",";
+         json += "\"resistance\":" + JsonSRNumber(srAvailable && ShowOriginalResistance && srLevels.hasResistance, srLevels.resistance) + ",";
+         json += "\"support\":" + JsonSRNumber(srAvailable && ShowOriginalSupport && srLevels.hasSupport, srLevels.support) + ",";
+         json += "\"resistanceUpperBuffer\":" + JsonSRNumber(srAvailable && ShowResistanceBuffer && srLevels.hasResistance && srLevels.hasAtr, srLevels.resistance + srLevels.buffer) + ",";
+         json += "\"resistanceLowerBuffer\":" + JsonSRNumber(srAvailable && ShowResistanceBuffer && srLevels.hasResistance && srLevels.hasAtr, srLevels.resistance - srLevels.buffer) + ",";
+         json += "\"supportUpperBuffer\":" + JsonSRNumber(srAvailable && ShowSupportBuffer && srLevels.hasSupport && srLevels.hasAtr, srLevels.support + srLevels.buffer) + ",";
+         json += "\"supportLowerBuffer\":" + JsonSRNumber(srAvailable && ShowSupportBuffer && srLevels.hasSupport && srLevels.hasAtr, srLevels.support - srLevels.buffer);
          json += "}";
       }
 
@@ -563,6 +632,88 @@ int CopyEnabledBuffer(const bool enabled,
       Print("Copied only ", copied, " of ", count, " values for ", label, ". Missing values will be sent as null.");
 
    return copied;
+}
+
+bool CalculateSRLevelsForChartCandle(const datetime chartCandleOpenTime, SRLevels &levels)
+{
+   levels.hasResistance = false;
+   levels.hasSupport = false;
+   levels.hasAtr = false;
+   levels.resistance = 0.0;
+   levels.support = 0.0;
+   levels.buffer = 0.0;
+
+   if(!EnableSRIndicator)
+      return false;
+
+   if(srAtrHandle == INVALID_HANDLE)
+      return false;
+
+   int chartSeconds = PeriodSeconds(_Period);
+   datetime chartCandleCloseTime = chartCandleOpenTime + (chartSeconds > 0 ? chartSeconds : 1);
+
+   // Pick the source-timeframe candle that was closed by this chart candle's
+   // close. This avoids using an unfinished source candle and avoids lookahead.
+   int containingSourceShift = iBarShift(_Symbol, SRSourceTimeframe, chartCandleCloseTime, false);
+   if(containingSourceShift < 0)
+      return false;
+
+   int latestClosedSourceShift = containingSourceShift + 1;
+   int sourceBars = Bars(_Symbol, SRSourceTimeframe);
+   if(sourceBars <= 0 || latestClosedSourceShift + SRLookbackCandles > sourceBars)
+      return false;
+
+   bool hasBestBullClose = false;
+   bool hasBestBearClose = false;
+   double bestBullClose = 0.0;
+   double bestBearClose = 0.0;
+
+   for(int offset = 0; offset <= SRLookbackCandles - 2; offset++)
+   {
+      int currentShift = latestClosedSourceShift + offset;
+      int previousShift = currentShift + 1;
+
+      double previousOpen = iOpen(_Symbol, SRSourceTimeframe, previousShift);
+      double previousClose = iClose(_Symbol, SRSourceTimeframe, previousShift);
+      double currentOpen = iOpen(_Symbol, SRSourceTimeframe, currentShift);
+      double currentClose = iClose(_Symbol, SRSourceTimeframe, currentShift);
+
+      if(!MathIsValidNumber(previousOpen) || !MathIsValidNumber(previousClose) ||
+         !MathIsValidNumber(currentOpen) || !MathIsValidNumber(currentClose))
+      {
+         continue;
+      }
+
+      bool bullBear = previousClose > previousOpen && currentClose < currentOpen;
+      if(bullBear && (!hasBestBullClose || previousClose > bestBullClose))
+      {
+         hasBestBullClose = true;
+         bestBullClose = previousClose;
+         levels.hasResistance = true;
+         levels.resistance = currentOpen;
+      }
+
+      bool bearBull = previousClose < previousOpen && currentClose > currentOpen;
+      if(bearBull && (!hasBestBearClose || previousClose < bestBearClose))
+      {
+         hasBestBearClose = true;
+         bestBearClose = previousClose;
+         levels.hasSupport = true;
+         levels.support = currentOpen;
+      }
+   }
+
+   double atrBuffer[];
+   ArraySetAsSeries(atrBuffer, true);
+   ResetLastError();
+   int atrCopied = CopyBuffer(srAtrHandle, 0, latestClosedSourceShift, 1, atrBuffer);
+   if(atrCopied == 1 && MathIsValidNumber(atrBuffer[0]) && atrBuffer[0] != EMPTY_VALUE)
+   {
+      levels.hasAtr = true;
+      levels.buffer = atrBuffer[0] * SRATRMultiplier;
+   }
+
+   return true;
 }
 
 bool SendJson(const string payload, const datetime newestClosedTime)
@@ -1941,6 +2092,14 @@ string JsonBufferNumber(const bool enabled,
       return "null";
 
    return JsonNumber(values[index], digits);
+}
+
+string JsonSRNumber(const bool enabled, const double value)
+{
+   if(!enabled)
+      return "null";
+
+   return JsonNumber(value, JSON_DECIMALS);
 }
 
 string JsonNumber(const double value, const int digits)

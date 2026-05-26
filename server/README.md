@@ -34,6 +34,8 @@ V3D adds a separate trade-management command queue for closing positions, partia
   "hasSnapshot": false,
   "hasAccount": false,
   "hasQuote": false,
+  "hasSRSettings": false,
+  "hasSRData": false,
   "positionCount": 0,
   "orderCount": 0,
   "pendingRiskCommands": 0,
@@ -136,7 +138,13 @@ It is separate from order placement. The current V3C order placement queue is co
       "adx": 24.5,
       "diPlus": 18.1,
       "diMinus": 14.9,
-      "rsi": 52.34567
+      "rsi": 52.34567,
+      "resistance": 1.09200,
+      "support": 1.08450,
+      "resistanceUpperBuffer": 1.09240,
+      "resistanceLowerBuffer": 1.09160,
+      "supportUpperBuffer": 1.08490,
+      "supportLowerBuffer": 1.08410
     }
   ],
   "account": {
@@ -207,10 +215,10 @@ Required validation:
 - `source` must be `"mt5"`.
 - `symbol` and `timeframe` must be non-empty strings.
 - `timeframeSeconds` and `lastClosedTime` must be numbers.
-- `settings` must be an object.
+- `settings` must be an object. `settings.sr` may describe the MT5-controlled S/R + ATR Buffer inputs: `enabled`, `sourceTimeframe`, `lookback`, `atrLength`, `atrMultiplier`, `showResistance`, `showSupport`, `showResistanceBuffer`, and `showSupportBuffer`. The EA's current `showOriginalResistance` and `showOriginalSupport` aliases are also accepted for backward compatibility.
 - `candles` must be an array.
 - Every candle must have numeric `time`, `open`, `high`, `low`, and `close`.
-- Indicator fields may be numbers, `null`, or omitted.
+- Indicator fields may be numbers, `null`, or omitted. This includes S/R + ATR Buffer fields: `resistance`, `support`, `resistanceUpperBuffer`, `resistanceLowerBuffer`, `supportUpperBuffer`, and `supportLowerBuffer`.
 - Optional `account` must contain string `server` and `currency`, number `balance`, `equity`, `profit`, `margin`, and `freeMargin`, nullable number `marginLevel` and `leverage`, and number-or-string `login`.
 - Optional `quote` must contain string `symbol` and numeric bid/ask, spread, digits, point, tick size/value, volume limits, volume step, and contract size.
 - Optional `positions` must be an array. Empty arrays are valid. Each position uses `BUY` or `SELL`, number-or-string `ticket` and `magic`, string `symbol` and `comment`, numeric prices/PnL fields, and nullable numeric `sl` and `tp`.

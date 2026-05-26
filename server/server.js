@@ -11,7 +11,25 @@ const ORDER_COMMAND_TTL_MS = 10 * 60 * 1000;
 const ORDER_RESULT_TTL_MS = 30 * 60 * 1000;
 const TRADE_MANAGEMENT_COMMAND_TTL_MS = 10 * 60 * 1000;
 const TRADE_MANAGEMENT_RESULT_TTL_MS = 30 * 60 * 1000;
-const INDICATOR_FIELDS = ['smaFast', 'smaMid', 'smaSlow', 'atr', 'adx', 'diPlus', 'diMinus', 'rsi'];
+const SR_FIELDS = [
+  'resistance',
+  'support',
+  'resistanceUpperBuffer',
+  'resistanceLowerBuffer',
+  'supportUpperBuffer',
+  'supportLowerBuffer'
+];
+const INDICATOR_FIELDS = [
+  'smaFast',
+  'smaMid',
+  'smaSlow',
+  'atr',
+  'adx',
+  'diPlus',
+  'diMinus',
+  'rsi',
+  ...SR_FIELDS
+];
 const LOCAL_BROWSER_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 const TRADE_MANAGEMENT_DISABLED_ERROR = 'Trade management commands are disabled on the backend.';
 const TRADE_MANAGEMENT_COMMAND_TYPES = new Set([
@@ -65,6 +83,8 @@ app.get('/health', (_req, res) => {
     hasSnapshot: Boolean(latestSnapshot),
     hasAccount: Boolean(latestSnapshot?.account),
     hasQuote: Boolean(latestSnapshot?.quote),
+    hasSRSettings: Boolean(latestSnapshot?.settings?.sr),
+    hasSRData: hasSRData(latestSnapshot),
     positionCount: Array.isArray(latestSnapshot?.positions) ? latestSnapshot.positions.length : 0,
     orderCount: Array.isArray(latestSnapshot?.orders) ? latestSnapshot.orders.length : 0,
     pendingRiskCommands: pendingRiskCommands.size,
@@ -104,6 +124,7 @@ app.post('/mt5/update', (req, res) => {
   console.log(`  last closed candle time: ${latestSnapshot.lastClosedTime ?? 'not provided'}`);
   console.log(`  account equity: ${formatOptionalNumber(latestSnapshot.account?.equity)}`);
   console.log(`  quote: ${formatQuoteLog(latestSnapshot.quote)}`);
+  console.log(`  s/r data: ${hasSRData(latestSnapshot) ? 'yes' : 'no'}`);
   console.log(`  open positions: ${Array.isArray(latestSnapshot.positions) ? latestSnapshot.positions.length : 0}`);
   console.log(`  pending orders: ${Array.isArray(latestSnapshot.orders) ? latestSnapshot.orders.length : 0}`);
   console.log(`  broadcast clients: ${broadcastCount}`);
@@ -449,6 +470,11 @@ function validateSnapshot(payload) {
 
   if (!payload.settings || typeof payload.settings !== 'object' || Array.isArray(payload.settings)) {
     return invalid('settings must be an object.');
+  }
+
+  const settingsValidation = validateSettings(payload.settings);
+  if (!settingsValidation.ok) {
+    return settingsValidation;
   }
 
   const accountValidation = validateAccount(payload.account);
@@ -1185,6 +1211,57 @@ function mergeSnapshot(payload) {
   }
 
   return payload;
+}
+
+function hasSRData(snapshot) {
+  return Array.isArray(snapshot?.candles) && snapshot.candles.some((candle) =>
+    SR_FIELDS.some((field) => Number.isFinite(candle?.[field]))
+  );
+}
+
+function validateSettings(settings) {
+  const srValidation = validateSRSettings(settings.sr);
+  if (!srValidation.ok) {
+    return srValidation;
+  }
+
+  return { ok: true };
+}
+
+function validateSRSettings(sr) {
+  if (sr === undefined) {
+    return { ok: true };
+  }
+
+  if (!sr || typeof sr !== 'object' || Array.isArray(sr)) {
+    return invalid('settings.sr must be an object when present.');
+  }
+
+  for (const field of [
+    'enabled',
+    'showResistance',
+    'showSupport',
+    'showResistanceBuffer',
+    'showSupportBuffer',
+    'showOriginalResistance',
+    'showOriginalSupport'
+  ]) {
+    if (sr[field] !== undefined && typeof sr[field] !== 'boolean') {
+      return invalid(`settings.sr.${field} must be a boolean when present.`);
+    }
+  }
+
+  if (sr.sourceTimeframe !== undefined && !isNonEmptyString(sr.sourceTimeframe)) {
+    return invalid('settings.sr.sourceTimeframe must be a non-empty string when present.');
+  }
+
+  for (const field of ['lookback', 'atrLength', 'atrMultiplier']) {
+    if (sr[field] !== undefined && !Number.isFinite(sr[field])) {
+      return invalid(`settings.sr.${field} must be a number when present.`);
+    }
+  }
+
+  return { ok: true };
 }
 
 function validateAccount(account) {
