@@ -396,3 +396,199 @@
 - Result: Web production build and backend syntax check passed.
 - Known issues: Running browser needs refresh to show the simplified panel.
 - Next steps: Refresh the frontend and run one MT5 verification to confirm the compact result is easier to read.
+
+## 2026-05-25 - Added V3C frontend-only Order Entry UI
+
+- Files changed: `web/src/App.jsx`, `web/src/components/OrderEntry.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added an `Order Entry` right-side menu section with order type, volume mode, market/pending entry handling, SL/TP inputs, saved comment and magic number, `Require SL`, session-only `Trading Mode`, `Prepare Order`, and a confirmation modal with disabled send placeholder.
+- Why: V3C needs an order-preparation workflow before any backend or MT5 order execution path is added.
+- Decisions: Order Entry is frontend-only. It does not call the backend, does not change the MT5 EA, and does not add order sending, closing, modification, or pending-order cancellation. `Trading Mode` is stored in `sessionStorage`, while form preferences stay in existing localStorage UI preferences.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for accidental trading endpoints/actions or Order Entry network calls.
+- Result: Web production build passed. Backend syntax check passed. Scope search found no new order/trade backend calls or MT5 trading actions; only existing V3B risk-calculation endpoints and unrelated browser cancellation event names matched.
+- Known issues: Manual browser verification is needed for the modal and validation paths.
+- Next steps: Start the frontend, open `Order Entry`, verify each order type validation path, and confirm the modal send button remains disabled.
+
+## 2026-05-25 - Added backend V3C order command queue support
+
+- Files changed: `server/server.js`, `server/README.md`, `PROJECT_LOG.md`
+- What changed: Added disabled-by-default backend order command queue support with `ENABLE_ORDER_COMMANDS`, `POST /orders/place`, `PLACE_ORDER` command delivery through `GET /mt5/commands`, `POST /mt5/order-result`, WebSocket `ORDER_RESULT` broadcasts, order result storage, TTL cleanup, and `/health` order queue fields.
+- Why: V3C needs a backend queue path for future MT5-side order placement while keeping the backend itself non-executing and safe by default.
+- Decisions: `POST /orders/place` returns `Order commands are disabled on the backend.` unless `ENABLE_ORDER_COMMANDS=true`. Market entry quote drift produces warnings instead of rejection; limit direction and broker volume min/max/step are rejected when the latest matching quote is available. Risk calculator commands still work regardless of the order safety flag.
+- Tests/checks run: `node --check server.js`; backend smoke test for disabled safety gate, enabled order queueing, `/mt5/commands` `PLACE_ORDER` delivery, invalid Buy Limit rejection, `/mt5/order-result`, WebSocket `ORDER_RESULT` broadcast, and command non-repeat; backend smoke test confirming `CALCULATE_RISK_LOT` still queues while order commands are disabled; scope search for order execution functions; `git diff --check`; checked port `3001` was not left running.
+- Result: Backend syntax check passed. Order queue smoke test passed. Risk command smoke test passed with order commands disabled. Scope search found no MT5/backend trade execution functions. Diff check had only expected CRLF warnings.
+- Known issues: MT5 EA does not yet process `PLACE_ORDER`, and the frontend `Send Order` button is still disabled from the previous frontend-only V3C step.
+- Next steps: Add MT5-side `PLACE_ORDER` handling and then wire the frontend confirmation modal to `POST /orders/place` when ready.
+
+## 2026-05-25 - Added MT5-side V3C order execution
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `README.md`, `server/README.md`, `PROJECT_LOG.md`
+- What changed: Added MT5 polling support for `PLACE_ORDER` commands with `EnableOrderPlacement=false` by default, `MaxDeviationPoints`, `MaxAllowedVolume`, `RequireStopLossForOrders`, and `DefaultMagicNumber` inputs. Implemented market buy/sell and buy/sell limit execution through `MqlTradeRequest`/`MqlTradeResult`, plus `POST /mt5/order-result` reporting.
+- Why: V3C now needs the EA to be able to execute queued backend order commands while keeping explicit safety controls and preserving existing chart/account/position snapshot updates.
+- Decisions: The EA always posts `ORDER_RESULT ok=false` when order placement is disabled. Duplicate `PLACE_ORDER` request IDs are remembered in memory and ignored to prevent duplicate orders. Validation covers symbol availability, broker volume min/max/step with downward normalization, max EA volume, market bid/ask entry selection, limit direction, SL/TP direction, required SL, stops level, freeze level for pending limits, and margin check with `OrderCalcMargin`. Closing positions, modifying positions, pending-order cancellation, stop orders, and stop-limit orders remain unsupported.
+- Tests/checks run: MetaEditor command-line compile after copying the EA into the local MT5 `MQL5\Experts` folder; `node --check server.js`; scope search for trade close/modify/cancel functions; `npm run build` in `web`; `git diff --check`.
+- Result: EA compiled with 0 errors and 0 warnings. Backend syntax check passed. Web production build passed. Scope search found only the intended `OrderSend` path and no close/modify/cancel actions. Diff check had only expected CRLF warnings.
+- Known issues: Frontend `Send Order` is still disabled and not connected to `POST /orders/place`. Live demo-account order testing has not been run.
+- Next steps: Wire the frontend confirmation modal to backend order queueing, then test with `ENABLE_ORDER_COMMANDS=true` and `EnableOrderPlacement=true` on a demo account only.
+
+## 2026-05-25 - Connected frontend Order Entry to backend queue
+
+- Files changed: `web/src/App.jsx`, `web/src/components/OrderEntry.jsx`, `web/src/utils/wsClient.js`, `README.md`, `PROJECT_LOG.md`
+- What changed: Enabled the confirmation modal `Send Order` workflow. The frontend now generates an order request ID, posts confirmed orders to `POST /orders/place`, shows sending/queued/waiting/filled/placed/failed states, listens for WebSocket `ORDER_RESULT` messages, matches results by request ID, and displays ticket, retcode, message, final volume, entry, SL, and TP.
+- Why: V3C needs the browser confirmation modal connected to the backend/MT5 command flow after backend queueing and EA order execution support were added.
+- Decisions: `Send Order` is enabled only inside the confirmation modal when Trading Mode is ON and current validation passes. A prepared modal locks after the first send attempt to prevent duplicate sends; the user must close/reopen or edit order details to prepare another command. Backend-disabled and EA-disabled states show explicit instructions to enable `ENABLE_ORDER_COMMANDS=true` and EA `EnableOrderPlacement=true`. Market orders warn if the quote changes while the modal is open.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for close/modify/cancel order controls/functions; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. No close, modify, or pending-cancel controls/actions were added. Diff check had only expected CRLF warnings.
+- Known issues: Live demo-account order placement has not been tested from the browser yet.
+- Next steps: Start backend with `ENABLE_ORDER_COMMANDS=true`, reattach EA with `EnableOrderPlacement=true` on a demo account, prepare one small order, and confirm the modal receives `ORDER_RESULT`.
+
+## 2026-05-25 - Added read-only pending orders monitor
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `server/server.js`, `web/src/components/TradingMonitor.jsx`, `README.md`, `server/README.md`, `PROJECT_LOG.md`
+- What changed: Added an `orders` array to the MT5 snapshot payload by reading active pending orders from `OrdersTotal`. Extended backend validation, storage, WebSocket broadcast, logs, and `/health.orderCount`. Added a separate `Pending Orders` table in the Trading Monitor using the existing `Current symbol only` / `All symbols` filter.
+- Why: V3C can place limit orders, so the read-only monitor needs visibility into pending orders after placement.
+- Decisions: Pending orders are read-only. The EA includes all account symbols, not only the chart symbol. The frontend displays pending orders separately from open positions and does not add cancel or modify buttons.
+- Tests/checks run: MetaEditor command-line compile after copying the EA into the local MT5 `MQL5\Experts` folder; `node --check server.js`; `npm run build` in `web`; backend smoke test posting an `orders` payload, verifying WebSocket broadcast and `/health.orderCount`, and confirming invalid order payload rejection; scope search for cancel/modify actions; `git diff --check`.
+- Result: EA compiled with 0 errors and 0 warnings. Backend syntax check passed. Web production build passed. Backend pending-order smoke test passed. Scope search found no pending-order cancel or modify implementation.
+- Known issues: Live MT5 pending-order display still needs a demo-account test with a real pending limit order.
+- Next steps: Place a small demo limit order, confirm it appears under `Pending Orders`, then cancel it manually in MT5 until dashboard cancel support is intentionally added.
+
+## 2026-05-25 - V3C safety, regression, and documentation pass
+
+- Files changed: `README.md`, `server/README.md`, `server/server.js`, `web/src/components/OrderEntry.jsx`, `PROJECT_LOG.md`
+- What changed: Expanded V3C documentation with order entry overview, supported order types, three safety gates, enable steps, market/limit behavior, SL/TP rules, pending orders table, MT5 retcode troubleshooting, and a demo-account checklist. Added backend duplicate order `requestId` rejection and required dashboard confirmation flags (`clientTradingMode`, `confirmationAccepted`) before `/orders/place` queues an order command. The frontend sends those flags only from the confirmation modal.
+- Why: V3C is the first real order-placement path, so accidental or repeated order submission needs extra guardrails and the operator docs need to be explicit.
+- Decisions: Confirmation flags are validated by the backend but not forwarded to MT5. Risk Calculator requests do not require these order-only flags. Backend and EA order gates remain disabled by default, and frontend Trading Mode remains session-only.
+- Tests/checks run: `node --check server.js`; `npm run build` in `web`; backend smoke test covering risk queueing while order commands are disabled, disabled `/orders/place`, missing confirmation flag rejection, enabled order queueing, duplicate request rejection, one `PLACE_ORDER` command poll, no forwarding of confirmation flags to MT5, `/mt5/order-result`, and WebSocket `ORDER_RESULT` broadcast; scope search for close/modify/cancel/break-even/trailing implementations; `git diff --check`; MetaEditor command-line compile invocation for `MT5_Dashboard_Bridge.mq5`.
+- Result: Backend syntax check passed. Web production build passed. Backend smoke test passed. Scope search found no close, modify, cancel, break-even, or trailing-stop implementation. Diff check had only expected CRLF warnings. MetaEditor exited with code 0, but did not produce a compile log at the requested temp path.
+- Known issues: The live V3C demo-account checklist has not been run from MT5/browser in this pass.
+- Next steps: On a demo account only, run the README V3C checklist with backend `ENABLE_ORDER_COMMANDS=true`, EA `EnableOrderPlacement=true`, and frontend Trading Mode ON.
+
+## 2026-05-25 - Moved V3C execution gate to MT5 Algo Trading
+
+- Files changed: `server/server.js`, `server/README.md`, `mt5/MT5_Dashboard_Bridge.mq5`, `web/src/App.jsx`, `web/src/components/OrderEntry.jsx`, `README.md`, `PROJECT_LOG.md`
+- What changed: Removed the backend `ENABLE_ORDER_COMMANDS` environment-variable gate and removed the EA `EnableOrderPlacement` input gate. The backend now always validates and queues local `PLACE_ORDER` commands after frontend Trading Mode and confirmation flags are present. The EA now rejects order execution unless MT5 Algo Trading, EA live-trading permission, account trading, and account expert-trading permission are enabled.
+- Why: Order execution should be controlled from MT5 with the Algo Trading enable/disable button instead of requiring a PowerShell environment variable before starting the backend.
+- Decisions: The backend remains non-executing and still validates payloads, quote/volume rules, duplicate `requestId`s, and confirmation flags. Final broker execution is controlled only by MT5 permission checks and existing order validation.
+- Tests/checks run: `node --check server.js`; `npm run build` in `web`; backend smoke test confirming `/orders/place` queues without an env var, missing confirmation flags reject, duplicates reject, one `PLACE_ORDER` command is delivered, `/mt5/order-result` is accepted, and `ORDER_RESULT` broadcasts over WebSocket; MetaEditor command-line compile invocation for `MT5_Dashboard_Bridge.mq5`; scope search for removed `ENABLE_ORDER_COMMANDS`/`EnableOrderPlacement` references; scope search for close/modify/cancel/break-even/trailing implementations; `git diff --check`.
+- Result: Backend syntax check passed. Web production build passed. Backend no-env order smoke test passed. Removed flag references were not found. No close, modify, cancel, break-even, or trailing-stop implementation was found. Diff check had only expected CRLF warnings. MetaEditor exited with code 0, but did not produce a compile log at the requested temp path.
+- Known issues: Live demo-account order testing still needs to be repeated after recompiling/reloading the EA in MT5.
+- Next steps: Recompile/reload the EA in MT5, start backend normally with `npm start`, keep Algo Trading OFF to confirm rejection, then turn Algo Trading ON on a demo account and run the V3C checklist.
+
+## 2026-05-25 - Compact Order Entry UI layout pass
+
+- Files changed: `web/src/components/OrderEntry.jsx`, `web/src/styles.css`, `PROJECT_LOG.md`
+- What changed: Redesigned the Order Entry panel into compact sections for Order, Volume, Prices, Protection, Execution Safety, and Validation / Result. Added two-column responsive field grids, smaller inputs, compact read-only values, a scrollable form body, a sticky action footer with Trading Mode, validation status, order placement status, and the Prepare Order button, plus a tighter confirmation modal with sticky actions.
+- Why: The previous right-panel Order Entry form was too tall and cramped, and the action flow was hard to follow at lower browser zoom levels.
+- Decisions: Kept the right panel fixed-width rather than adding width dragging. The form now uses internal scrolling and compact two-column layout to preserve chart space without changing backend, MT5 EA, risk formulas, chart rendering, or trading logic.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for close/modify/cancel/break-even/trailing implementations; `git diff --check`; headless Chrome desktop layout smoke test at 100%, 90%, and 75% zoom with a sample MT5 snapshot.
+- Result: Web production build passed. Backend syntax check passed. Scope search found no forbidden trade-management actions. Diff check had only expected CRLF warnings. The headless desktop layout smoke test passed at 100%, 90%, and 75% before the final compact footer status line was added; a later rerun timed out during automation startup, and no app failure was observed.
+- Known issues: Manual visual verification in the real browser is still recommended with live MT5 data.
+- Next steps: Start the frontend, open Order Entry, check the sticky footer and confirmation modal at 100%, 90%, and 75% zoom, then run the normal demo-account V3C safety flow.
+
+## 2026-05-25 - Added resizable right-side workspace panel
+
+- Files changed: `web/src/App.jsx`, `web/src/styles.css`, `PROJECT_LOG.md`
+- What changed: Added a persisted `sidePanelWidth` UI preference, a draggable left-edge resize handle on the right-side panel, width clamping from 280px to 560px, and a CSS variable-driven workspace grid. Kept the side-panel tabs/header fixed at the top, preserved collapsed behavior, and kept section content scrolling internally.
+- Why: Trading Monitor, Risk Calculator, Indicators, and Order Entry need workspace-like panel behavior instead of a cramped fixed sidebar.
+- Decisions: Width resizing is frontend-only and stored in `localStorage` with the other UI preferences. The chart area is resized through the existing layout and chart `ResizeObserver`; no chart data reload, backend changes, MT5 EA changes, risk formula changes, or trading behavior changes were made.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for close/modify/cancel/break-even/trailing implementations; `git diff --check`; checked that local dev/test ports were not left listening.
+- Result: Web production build passed. Backend syntax check passed. Scope search found no forbidden trade-management actions. Diff check had only expected CRLF warnings. No local test ports were left running.
+- Known issues: Manual browser drag testing with live charts is still recommended to confirm feel at the user's preferred zoom level.
+- Next steps: Start frontend, drag the right panel between narrow and wide widths, collapse/reopen it, and confirm chart time range/sync remains stable.
+
+## 2026-05-26 - Fixed chart crosshair overlay synchronization by candle time
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `PROJECT_LOG.md`
+- What changed: Reworked synchronized crosshair overlays to store the selected MT5 candle timestamp and convert that time to an x-coordinate separately for every registered chart panel using `timeScale().timeToCoordinate(time)`. Mouse leaving one panel no longer clears the overlays if the pointer is still inside the overall dashboard. The vertical marker now uses a subtle dashed style.
+- Why: Reusing the source panel's pixel coordinate caused the overlay to drift or disappear when panels had different widths or layouts. The user needs Price, ATR, ADX/DI, RSI, and future panels to show the same selected candle/time together.
+- Decisions: Kept Lightweight Charts native `setCrosshairPosition` as best-effort for panels with a valid primary series value, but made the custom DOM overlay the reliable synchronization layer. The implementation uses the existing chart registry list, so it is not hardcoded to only three panels.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for close/modify/cancel/break-even/trailing implementations; `git diff --check`; attempted headless Chrome crosshair smoke tests with a sample MT5 snapshot.
+- Result: Web production build passed. Backend syntax check passed. Scope search found no forbidden trade-management actions. Diff check had only expected CRLF warnings. Browser automation attempts timed out or connected to the wrong DevTools target, so manual visual verification is still needed.
+- Known issues: The synchronized crosshair should be verified manually in the browser with live charts after starting backend/frontend.
+- Next steps: Move the mouse over Price, ATR, ADX/DI, and RSI; confirm the dashed vertical marker appears on all expanded panels, remains aligned while scrolling/zooming, and clears only when leaving the chart area.
+
+## 2026-05-26 - Regression pass after Order Entry, right panel, and crosshair updates
+
+- Files changed: `web/src/components/OrderEntry.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Fixed a compact Order Entry layout overflow found by browser smoke testing. The Order Entry two-column grid now auto-fits to the available panel width, compact controls use `min-width: 0`, segmented button labels truncate instead of pushing fields out of bounds, and the header separator was changed to ASCII text. Updated README documentation for right-panel workspace behavior, Order Entry usability, synchronized crosshair behavior across all chart panels, and the regression checklist.
+- Why: The redesigned right panel and Order Entry form need to remain usable at 100%, 90%, and 75% browser zoom without clipping fields, while preserving the existing order safety model and chart synchronization behavior.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; backend smoke test for snapshot intake, health counts, risk queueing, order confirmation flag rejection, confirmed order queueing, duplicate order request rejection, command polling, MT5 order result acceptance, WebSocket `ORDER_RESULT` broadcast, and empty-candle rejection; headless Chrome smoke test with sample MT5 snapshot for side-menu switching, Order Entry layout at 100/90/75% zoom, sticky footer visibility, Trading Monitor table scrolling, right-panel collapse/expand, and crosshair overlay visibility on all expanded chart panels; scope search for stale `ENABLE_ORDER_COMMANDS` / `EnableOrderPlacement` references in active code/docs; scope search for close/modify/cancel/break-even/trailing controls or actions; `git diff --check`; local test port cleanup check.
+- Result: Web production build passed. Backend syntax check passed. Backend smoke test passed. Browser layout/crosshair smoke test passed. No stale backend/EA order gate references remain in active docs/code. No close, modify, cancel, break-even, or trailing-stop implementation was found. Diff check had only expected CRLF warnings. Test ports were cleaned up.
+- Known issues: Live MT5/demo-account verification still needs to be run manually because the automated checks use a sample backend snapshot and do not execute real broker orders.
+- Next steps: Run the README regression checklist with MT5 attached to EURUSD M15, then on a demo account confirm MT5 Algo Trading OFF blocks execution and Algo Trading ON allows only explicitly confirmed market/limit test orders.
+
+## 2026-05-26 - Recompiled installed MT5 EA copy after stale order gate message
+
+- Files changed: `PROJECT_LOG.md`; external MT5 data-folder copy `C:\Users\chinaski\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Experts\MT5_Dashboard_Bridge.mq5`; external compiled EA `...\MT5_Dashboard_Bridge.ex5`
+- What changed: Copied the current repository EA source into the MT5 `MQL5\Experts` folder and recompiled it.
+- Why: MT5 was returning `Order placement disabled in EA inputs.`, which no longer exists in the repository source. The installed MT5 copy was older and still contained `input bool EnableOrderPlacement = false`.
+- Tests/checks run: `rg` search for `EnableOrderPlacement` / `Order placement disabled` in repo source and installed MT5 source; MetaEditor command-line compile of the installed MT5 copy.
+- Result: Installed source no longer contains the old order-placement gate. MetaEditor compiled with `0 errors, 0 warnings`; the installed `.ex5` timestamp updated to `2026-05-26 10:23:34`.
+- Known issues: The EA must be removed/re-attached or MT5 restarted so the running chart loads the newly compiled `.ex5`.
+- Next steps: In MT5, remove the EA from the chart and attach it again from Navigator, then test with Algo Trading OFF/ON on a demo account.
+
+## 2026-05-26 - Added V3D frontend-only trade-management UI preview
+
+- Files changed: `web/src/components/TradingMonitor.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added Trading Monitor row action menus for open positions (`Close`, `Partial Close`, `Modify SL/TP`, `Breakeven`) and pending orders (`Cancel`, `Modify SL/TP`, `Modify Entry Price`). Added a session-based Trading Mode toggle inside Trading Monitor, compact confirmation modals, local validation for partial close volume, SL/TP direction, breakeven offset, and pending order entry/SL/TP rules, plus disabled final action buttons labeled `Backend trade management not implemented yet.`
+- Why: V3D needs the trade-management workflow and safety UX scaffold before adding any backend command endpoints or MT5 execution paths.
+- Decisions: This pass is frontend-only. It does not add backend endpoints, does not send network requests from Trading Monitor, does not change MT5 EA logic, and does not implement close, partial close, modify, cancel, trailing stop, or automated management actions.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for Trading Monitor `fetch` calls, trade-management backend routes, and MT5 close/modify/cancel actions; local test port cleanup check. A headless Chrome smoke test was attempted but timed out during orchestration.
+- Result: Web production build passed. Backend syntax check passed. Scope search found no frontend trade-management network calls, no new backend trade-management endpoints, and no MT5 close/modify/cancel implementation. No local test ports were left running.
+- Known issues: The V3D modals still need manual browser verification with live MT5 position and pending order rows.
+- Next steps: Start backend/frontend, open Trading Monitor, turn Trading Mode ON, open every position and pending-order action modal, confirm validation works, and confirm every send/action button remains disabled.
+
+## 2026-05-26 - Added V3D backend trade-management command queue
+
+- Files changed: `server/server.js`, `server/README.md`, `PROJECT_LOG.md`
+- What changed: Added disabled-by-default V3D backend queue support behind `ENABLE_TRADE_MANAGEMENT=true`. New endpoints validate and queue `CLOSE_POSITION`, `MODIFY_POSITION`, `MOVE_TO_BREAKEVEN`, `CANCEL_ORDER`, and `MODIFY_ORDER` commands for MT5 polling. Added `POST /mt5/trade-management-result`, WebSocket `TRADE_MANAGEMENT_RESULT` broadcast, health counters, command/result TTL cleanup, logging, and server README documentation.
+- Why: Trade management needs the same polling architecture as risk and order placement: backend validates and queues commands, MT5 polls and later executes, and backend relays results without directly trading.
+- Decisions: The backend gate is separate from order placement. The current order placement flow remains unchanged. Trade-management endpoints return `Trade management commands are disabled on the backend.` unless `ENABLE_TRADE_MANAGEMENT=true`. No MT5 EA support or frontend send wiring was added in this step.
+- Tests/checks run: `node --check server.js`; backend smoke test with management disabled; backend smoke test with management enabled for all six endpoint flows, duplicate request rejection, invalid partial close rejection, invalid position stop rejection, invalid pending order edit rejection, `/mt5/commands` delivery, `/mt5/trade-management-result` acceptance, WebSocket result broadcast, and `/health` management counters; final focused smoke for disabled `/orders/cancel`, enabled `CANCEL_ORDER` delivery, and accepted management result; scope search for stale order env references and backend trading execution calls.
+- Result: Backend syntax and smoke tests passed. Scope search found no `OrderSend`, close, delete, modify, or trade-action execution calls in `server.js`; backend remains a command queue only.
+- Known issues: MT5 EA does not yet process V3D trade-management command types, and the frontend still does not send V3D requests.
+- Next steps: Implement MT5-side handlers for the new command types, then wire the existing frontend V3D modals to these backend endpoints.
+
+## 2026-05-26 - Added MT5-side V3D trade-management execution
+
+- Files changed: `mt5/MT5_Dashboard_Bridge.mq5`, `README.md`, `PROJECT_LOG.md`; external MT5 data-folder copy `C:\Users\chinaski\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Experts\MT5_Dashboard_Bridge.mq5`; external compiled EA `...\MT5_Dashboard_Bridge.ex5`
+- What changed: Added `EnableTradeManagement=false` EA input and MT5 execution handlers for `CLOSE_POSITION`, `MODIFY_POSITION`, `MOVE_TO_BREAKEVEN`, `CANCEL_ORDER`, and `MODIFY_ORDER`. Added duplicate request tracking, command parsing, validation, `MqlTradeRequest`/`MqlTradeResult` execution, `TRADE_MANAGEMENT_RESULT` JSON building, and posting to `/mt5/trade-management-result`. Updated README V3D wording from UI-only to gated backend/MT5 support.
+- Why: V3D requires MT5 to execute queued management commands while keeping management disabled by default and separate from new order placement.
+- Decisions: `EnableTradeManagement=false` rejects every V3D command with `Trade management disabled in EA inputs.` without sending trade requests. Existing `PLACE_ORDER`, risk calculation, snapshots, and pending-order monitor behavior remain unchanged. Pending order modification supports only `BUY_LIMIT` and `SELL_LIMIT`. Bulk close/cancel, trailing stop, and automated management were not added.
+- Tests/checks run: MetaEditor command-line compile of the installed MT5 `MQL5\Experts` copy after copying the repo source; `node --check server.js`; `rg` checks for V3D command/result symbols; `git diff --check`; README stale wording search.
+- Result: MetaEditor compiled with `0 errors, 0 warnings`; installed `.ex5` timestamp updated to `2026-05-26 11:46:19`. Backend syntax check passed. Diff check had only expected CRLF warnings.
+- Known issues: Frontend V3D modals are not yet wired to send management requests, and live demo-account management actions have not been tested.
+- Next steps: Reattach/restart the EA in MT5 so the new `.ex5` loads, then wire frontend V3D modals to the backend endpoints and test on a demo account only.
+
+## 2026-05-26 - Wired frontend V3D trade-management modals to backend endpoints
+
+- Files changed: `web/src/App.jsx`, `web/src/utils/wsClient.js`, `web/src/components/TradingMonitor.jsx`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added frontend trade-management request state, timeout handling, backend POST calls for close/partial close, position modify, breakeven, pending cancel, and pending modify, plus WebSocket handling for `TRADE_MANAGEMENT_RESULT`. Trading Monitor modals now enable confirmation only when Trading Mode is ON, local validation passes, and no management request is pending. Modals display sending/queued/waiting/success/failed states, backend/EA disabled instructions, and returned command/ticket/symbol/retcode/message details.
+- Why: V3D backend and MT5 execution already existed; the frontend modals needed to send confirmed management actions and surface MT5 results safely.
+- Decisions: Kept the existing safety gates: session Trading Mode, backend `ENABLE_TRADE_MANAGEMENT`, EA `EnableTradeManagement`, confirmation modal, duplicate pending request blocking, and MT5 snapshot-driven table refresh. Did not add close-all, cancel-all, trailing stop, or automated management.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; scope search for stale frontend-only V3D wording and forbidden bulk/trailing/automated management additions; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. Stale UI-only wording was removed. Scope search only found documented absence of bulk/trailing/automated management and the EA safety comment. Diff check had only expected CRLF warnings.
+- Known issues: Live demo-account verification is still required for each V3D management command path.
+- Next steps: Start backend with `ENABLE_TRADE_MANAGEMENT=true`, reattach the compiled EA with `EnableTradeManagement=true`, keep testing on demo only, and verify full close, partial close, SL/TP modify, breakeven, pending cancel, and pending modify one at a time.
+
+## 2026-05-26 - Improved Trading Monitor action UX
+
+- Files changed: `web/src/components/TradingMonitor.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Replaced the row action select with a compact dropdown menu, made `Close` and `Cancel` visually distinct without making the table noisy, allowed action preview modals to open while Trading Mode is OFF, and kept final confirmation disabled until Trading Mode is ON and validation passes. Simplified pending-order actions to `Cancel` and `Modify Order`, with `Modify Order` covering entry, SL, and TP. Updated modal titles, summaries, and current/new value display for modification actions.
+- Why: After V3D wiring, the actions needed to be easier to use in the narrow Trading Monitor panel while still making dangerous actions explicit and preserving safety gates.
+- Decisions: Kept all backend and MT5 command logic unchanged. Did not add bulk actions, trailing stop, or automated management.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; stale-text/scope search for removed pending action names and forbidden bulk/trailing/automated management wording.
+- Result: Web production build passed. Backend syntax check passed. Scope search found only documented absence of bulk/trailing/automated management.
+- Known issues: Manual browser verification with live positions/orders is still recommended to confirm the dropdown placement feels right inside the horizontally scrolling table.
+- Next steps: In the browser, open Trading Monitor with Trading Mode OFF, confirm preview modals open but final confirm is disabled, then enable Trading Mode on demo and verify each V3D action one at a time.
+
+## 2026-05-26 - V3D safety, regression, and documentation pass
+
+- Files changed: `README.md`, `PROJECT_LOG.md`
+- What changed: Expanded root documentation with V3D enable steps, explicit frontend/backend/EA/MT5 safety gates, a full 40-step demo-account checklist, known limitations, and MT5 retcode troubleshooting for invalid stops, market closed, invalid volume, trade disabled, and insufficient margin. Updated stale global limitations text so it reflects current V3C/V3D behavior.
+- Why: V3D now includes real trade-management execution, so setup, safety gates, demo-only test flow, limitations, and common failure modes need to be explicit.
+- Decisions: No frontend, backend, or MT5 execution logic was changed in this pass. The backend `ENABLE_TRADE_MANAGEMENT` gate remains separate from MT5 Algo Trading and EA `EnableTradeManagement`.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; static scope search for V3D gates, command types, removed/stale gate names, and forbidden bulk/trailing/automated management wording; backend smoke test for disabled management rejection, enabled `CANCEL_ORDER` queue delivery through `/mt5/commands`, and `/mt5/trade-management-result` acceptance; `git diff --check`; local port cleanup check.
+- Result: Web production build passed. Backend syntax check passed. Backend V3D smoke test passed. Static searches showed only intended gate/command references and documented absence of bulk/trailing/automated management. Diff check had only expected CRLF warnings. Port `3001` was free after the smoke test.
+- Known issues: The full V3D broker checklist still requires manual demo-account execution in MT5.
+- Next steps: Run the README V3D manual checklist on a demo account, starting with backend disabled, then EA disabled, then enabled management one action at a time.

@@ -125,7 +125,6 @@ export default function TradingDashboard({
   const lastTimeRangeRef = useRef(null);
   const syncingCrosshairRef = useRef(false);
   const activeCrosshairTimeRef = useRef(null);
-  const activeCrosshairCoordinateRef = useRef(null);
   const hasFitContentRef = useRef(false);
   const lastDatasetKeyRef = useRef(null);
   const lastChartIdentityRef = useRef(null);
@@ -257,7 +256,6 @@ export default function TradingDashboard({
       lastLogicalRangeRef.current = null;
       lastTimeRangeRef.current = null;
       activeCrosshairTimeRef.current = null;
-      activeCrosshairCoordinateRef.current = null;
       setCrosshairTime(null);
     };
   }, []);
@@ -421,7 +419,7 @@ export default function TradingDashboard({
           fullscreenPanel={fullscreenPanel}
           onToggleFullscreen={toggleFullscreen}
           onPointerMove={handlePanelPointerMove}
-          onPointerLeave={clearCrosshairs}
+          onPointerLeave={handlePanelPointerLeave}
         />
         {panelLayout.handles.priceAtr ? (
           <ResizeHandle id="price-atr" label="Resize price and ATR panels" onPointerDown={startPanelResize} />
@@ -442,7 +440,7 @@ export default function TradingDashboard({
           onToggleFullscreen={toggleFullscreen}
           onToggleCollapsed={() => onTogglePanelCollapsed('atr')}
           onPointerMove={handlePanelPointerMove}
-          onPointerLeave={clearCrosshairs}
+          onPointerLeave={handlePanelPointerLeave}
         />
         {panelLayout.handles.atrAdx ? (
           <ResizeHandle id="atr-adx" label="Resize ATR and ADX/DI panels" onPointerDown={startPanelResize} />
@@ -463,7 +461,7 @@ export default function TradingDashboard({
           onToggleFullscreen={toggleFullscreen}
           onToggleCollapsed={() => onTogglePanelCollapsed('adx')}
           onPointerMove={handlePanelPointerMove}
-          onPointerLeave={clearCrosshairs}
+          onPointerLeave={handlePanelPointerLeave}
         />
         <ChartPanel
           id="rsi"
@@ -481,7 +479,7 @@ export default function TradingDashboard({
           onToggleFullscreen={toggleFullscreen}
           onToggleCollapsed={() => onTogglePanelCollapsed('rsi')}
           onPointerMove={handlePanelPointerMove}
-          onPointerLeave={clearCrosshairs}
+          onPointerLeave={handlePanelPointerLeave}
         />
       </div>
     </section>
@@ -595,17 +593,17 @@ export default function TradingDashboard({
     const y = event.clientY - rect.top;
 
     if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
-      clearCrosshairs(sourceName);
+      clearCrosshairs();
       return;
     }
 
     const time = normalizeTime(entry.chart.timeScale().coordinateToTime(x));
     if (!time || !dataRef.current.lookup.price.has(time)) {
-      clearCrosshairs(sourceName);
+      clearCrosshairs();
       return;
     }
 
-    applyCrosshairTime(sourceName, time, x);
+    applyCrosshairTime(sourceName, time);
   }
 
   function syncCrosshair(sourceName, param) {
@@ -616,20 +614,27 @@ export default function TradingDashboard({
 
     const time = normalizeTime(param?.time);
     if (!time || !param?.point || param.point.x < 0 || param.point.y < 0) {
-      clearCrosshairs(sourceName);
       return;
     }
 
     const data = dataRef.current;
     if (!data.lookup.price.has(time)) {
-      clearCrosshairs(sourceName);
       return;
     }
 
-    applyCrosshairTime(sourceName, time, param.point.x);
+    applyCrosshairTime(sourceName, time);
   }
 
-  function applyCrosshairTime(sourceName, time, coordinate = null) {
+  function handlePanelPointerLeave(_sourceName, event) {
+    const nextTarget = event?.relatedTarget;
+    if (nextTarget && dashboardRef.current?.contains(nextTarget)) {
+      return;
+    }
+
+    clearCrosshairs();
+  }
+
+  function applyCrosshairTime(sourceName, time) {
     const chartsState = chartsRef.current;
     if (!chartsState || syncingCrosshairRef.current) {
       return;
@@ -638,7 +643,6 @@ export default function TradingDashboard({
     const data = dataRef.current;
     syncingCrosshairRef.current = true;
     activeCrosshairTimeRef.current = time;
-    activeCrosshairCoordinateRef.current = Number.isFinite(coordinate) ? coordinate : null;
     setCrosshairTime((current) => (current === time ? current : time));
 
     // Native Lightweight Charts crosshair sync needs a series value in the
@@ -658,7 +662,7 @@ export default function TradingDashboard({
       }
     }
 
-    updateCrosshairOverlays(time, activeCrosshairCoordinateRef.current);
+    updateCrosshairOverlays(time);
     syncingCrosshairRef.current = false;
   }
 
@@ -670,7 +674,6 @@ export default function TradingDashboard({
 
     syncingCrosshairRef.current = true;
     activeCrosshairTimeRef.current = null;
-    activeCrosshairCoordinateRef.current = null;
     setCrosshairTime(null);
 
     for (const entry of chartsState.entries) {
@@ -684,29 +687,23 @@ export default function TradingDashboard({
     syncingCrosshairRef.current = false;
   }
 
-  function updateCrosshairOverlays(time = activeCrosshairTimeRef.current, coordinate = null) {
+  function updateCrosshairOverlays(time = activeCrosshairTimeRef.current) {
     const chartsState = chartsRef.current;
     if (!chartsState || !time) {
       return;
     }
 
-    let sharedCoordinate = Number.isFinite(coordinate) ? coordinate : null;
-    if (!Number.isFinite(sharedCoordinate)) {
-      const referenceEntry = chartsState.entries.find((entry) => entry.name === 'price') || chartsState.entries[0];
-      sharedCoordinate = referenceEntry?.chart.timeScale().timeToCoordinate(time);
-    }
-
-    if (!Number.isFinite(sharedCoordinate)) {
-      for (const entry of chartsState.entries) {
+    // Custom crosshair sync is time-driven, not pixel-driven. Each panel can
+    // have a different width after right-panel resizing, fullscreen changes, or
+    // scrollbar/layout changes, so the selected MT5 candle timestamp is
+    // converted to an x-coordinate separately for every registered chart.
+    for (const entry of chartsState.entries) {
+      const coordinate = entry.chart.timeScale().timeToCoordinate(time);
+      if (Number.isFinite(coordinate)) {
+        showCrosshairOverlay(entry, coordinate);
+      } else {
         hideCrosshairOverlay(entry);
       }
-      return;
-    }
-
-    activeCrosshairCoordinateRef.current = sharedCoordinate;
-
-    for (const entry of chartsState.entries) {
-      showCrosshairOverlay(entry, sharedCoordinate);
     }
   }
 
@@ -1012,7 +1009,7 @@ function ChartPanel({
     <div
       className={className}
       onMouseMove={collapsed || hidden ? undefined : (event) => onPointerMove?.(id, event)}
-      onMouseLeave={collapsed || hidden ? undefined : () => onPointerLeave?.(id)}
+      onMouseLeave={collapsed || hidden ? undefined : (event) => onPointerLeave?.(id, event)}
       {...collapsedProps}
     >
       <div className="chart-title">

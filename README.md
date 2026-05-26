@@ -5,11 +5,13 @@ Local Windows dashboard that mirrors the currently open MetaTrader 5 chart in a 
 The dashboard scope is deliberately narrow:
 
 - Local-only: MT5, Node.js server, and browser run on the same Windows machine.
-- Read-only: no order execution, no order closing, and no order modification.
+- V3C order entry: market and limit order placement exists behind explicit frontend, backend, and EA safety gates.
+- V3D trade management: close, partial close, SL/TP modification, breakeven, pending cancel, and pending modify exist behind explicit frontend, backend, and EA safety gates.
+- No bulk management, trailing stop, or automated trade management.
 - Chart-attached: the dashboard mirrors only the chart where `MT5_Dashboard_Bridge.mq5` is attached.
 - Closed candles only: the EA sends shift `1` and older candles, not the unfinished live candle.
 - MT5-calculated indicators only: the browser displays indicator values sent by MT5.
-- V3A monitor data is read-only: account summary, chart-symbol quote/properties, and open positions.
+- Monitor data includes account summary, chart-symbol quote/properties, open positions, and pending orders.
 - No frontend symbol/timeframe selector and no volume panel.
 
 ## Architecture
@@ -20,7 +22,8 @@ MetaTrader 5 chart
   uses _Symbol and _Period only
   calculates SMA, ATR, ADX, DI+, DI- and RSI
   sends closed candles only
-  sends read-only account, quote, and open position monitor data
+  sends read-only account, quote, open position, and pending order monitor data
+  polls local command queue for risk verification and gated order placement
         |
         | HTTP POST http://127.0.0.1:3001/mt5/update
         v
@@ -30,6 +33,8 @@ Node.js local bridge
   latest valid snapshot is kept in memory
   indicators are not calculated or modified
   queues calculation-only risk commands for MT5 polling
+  validates and queues PLACE_ORDER commands for MT5 polling
+  validates and queues gated trade-management commands for MT5 polling
         |
         | WebSocket ws://127.0.0.1:3001
         v
@@ -42,6 +47,12 @@ Risk calculator verification:
   React POST /risk/calculate -> backend queue
   MT5 GET /mt5/commands -> broker-normalized calculation
   MT5 POST /mt5/risk-result -> backend WebSocket riskResult
+
+V3C order placement:
+  React confirmation modal POST /orders/place
+  backend validates and queues PLACE_ORDER locally
+  MT5 executes only when Algo Trading and EA live trading are allowed
+  MT5 POST /mt5/order-result -> backend WebSocket ORDER_RESULT
 ```
 
 ## Project Layout
@@ -67,7 +78,9 @@ mt5-tradingview-local/
 |       |-- components/
 |       |   |-- StatusBar.jsx
 |       |   |-- IndicatorSettings.jsx
-|       |   `-- TradingMonitor.jsx
+|       |   |-- TradingMonitor.jsx
+|       |   |-- RiskCalculator.jsx
+|       |   `-- OrderEntry.jsx
 |       `-- utils/
 |           `-- wsClient.js
 `-- README.md
@@ -144,10 +157,14 @@ Expected local endpoints:
 HTTP health:  http://127.0.0.1:3001/health
 MT5 POST:     http://127.0.0.1:3001/mt5/update
 Risk request: http://127.0.0.1:3001/risk/calculate
+Order request: http://127.0.0.1:3001/orders/place
 MT5 commands: http://127.0.0.1:3001/mt5/commands
 Risk result:  http://127.0.0.1:3001/mt5/risk-result
+Order result: http://127.0.0.1:3001/mt5/order-result
 WebSocket:    ws://127.0.0.1:3001
 ```
+
+Order command queuing is local and always validated by the backend. Final execution is controlled in MT5 by the Algo Trading button, EA live-trading permission, account trading permission, and broker symbol rules.
 
 ## Run the Frontend
 
@@ -224,7 +241,7 @@ V3A extends the MT5 payload with read-only trading monitor data:
 
 The EA sends monitor data every `UpdateSeconds` so PnL and quote values can refresh between closed candles. Candle history remains optimized: the EA sends the full candle array only on startup or when a new candle closes. The backend keeps the last candle snapshot and merges monitor-only updates before broadcasting to browsers.
 
-The frontend uses a right-side menu with three sections: `Trading Monitor`, `Indicators`, and `Risk Calculator`. The whole side panel can be collapsed to give more width to the charts, and the active section is saved in `localStorage`. `Trading Monitor` shows account summary, chart-symbol quote, and an open-positions table. The position filter defaults to `Current symbol only` and can be switched to `All symbols`; the filter is also saved in `localStorage`.
+The frontend uses a right-side menu with sections for `Trading Monitor`, `Indicators`, `Risk Calculator`, and `Order Entry`. The whole side panel can be collapsed to give more width to the charts, and the active section is saved in `localStorage`. `Trading Monitor` shows account summary, chart-symbol quote, open positions, and pending orders. The filter defaults to `Current symbol only` and can be switched to `All symbols`; the filter applies to both positions and pending orders and is saved in `localStorage`.
 
 V3A is still read-only. It does not place, close, or modify trades.
 
@@ -400,6 +417,414 @@ Manual V3B checks:
 22. Confirm no Buy/Sell trade buttons exist yet.
 23. Confirm existing chart sync and Trading Monitor still work.
 
+## V3C Order Entry
+
+V3C starts the order-entry workflow. The frontend can prepare an order, the backend validates and queues `PLACE_ORDER` commands locally, and the MT5 EA can execute market/limit entries only when MT5 trading permissions allow it.
+
+Test V3C on a demo account first. Do not enable order placement on a live account until you have verified the full flow, broker behavior, symbol settings, lot sizing, stop validation, and failure handling.
+
+Supported order types:
+
+- Market Buy
+- Market Sell
+- Buy Limit
+- Sell Limit
+
+Unsupported order-entry actions:
+
+- Buy Stop / Sell Stop
+- Stop Limit
+- Trailing stop
+
+Real order placement has these safety gates:
+
+1. Frontend `Trading Mode` must be ON for the current browser session.
+2. The confirmation modal must be accepted.
+3. The MT5 Algo Trading button must be ON.
+4. Live trading must be allowed for the attached EA.
+5. The account and broker must allow expert trading on the symbol.
+
+The frontend gate resets to OFF when the browser session closes. MT5 controls final execution through its normal Algo Trading and live-trading permissions. Buy Stop, Sell Stop, Stop Limit, trailing stop, and automated trade management are not implemented.
+
+Start the backend normally:
+
+```powershell
+cd server
+npm start
+```
+
+Then use MT5 to control execution: keep the Algo Trading button OFF to block order execution, or turn it ON on a demo account when you are ready to test real order placement.
+
+The right-side menu now includes `Order Entry` with:
+
+- Order type: Market Buy, Market Sell, Buy Limit, Sell Limit.
+- Volume mode: use the latest successful MT5 verified Risk Calculator volume, or enter manual volume.
+- Market entry price: read-only ask for Market Buy and bid for Market Sell.
+- Pending entry price: manual entry for Buy Limit and Sell Limit.
+- Stop Loss with `Require SL`, enabled by default and saved in localStorage.
+- Optional Take Profit.
+- Optional comment saved in localStorage.
+- Optional magic number saved in localStorage.
+- `Trading Mode` safety toggle, OFF by default and saved only in sessionStorage.
+- `Prepare Order`, which validates locally and opens a confirmation modal.
+
+The confirmation modal shows symbol, order type, side, volume, entry, SL, TP, estimated risk when available from Risk Calculator, account currency, comment, and magic number.
+
+`Send Order` posts the confirmed order to `POST /orders/place`. The request includes dashboard safety flags showing that Trading Mode was enabled and the confirmation modal was accepted; the backend rejects order requests without those flags. The modal then shows `Sending`, `Queued`, `Waiting for MT5`, `Filled / placed`, or `Failed`. The result displays ticket when available, retcode, message, final volume, entry price, SL, and TP. Duplicate sending is blocked for a prepared order after the button is clicked; close and prepare a new order if you need to send another command.
+
+V3C validation includes:
+
+- Quote and account data must be available.
+- Manual volume must fit broker min/max/step.
+- Risk Calculator volume requires a successful MT5 verified result.
+- Stale Risk Calculator results are warned.
+- Buy Limit entry must be below current ask.
+- Sell Limit entry must be above current bid.
+- Buy SL must be below entry; Buy TP must be above entry.
+- Sell SL must be above entry; Sell TP must be below entry.
+- If `Require SL` is enabled, SL must be provided and valid.
+
+Market order behavior:
+
+- Market Buy uses the current ask.
+- Market Sell uses the current bid.
+- If the market price changes while the modal is open, the modal warns that the price may have changed.
+
+Limit order behavior:
+
+- Buy Limit entry must be below current ask.
+- Sell Limit entry must be above current bid.
+- Successful limit orders appear in the read-only `Pending Orders` table after MT5 sends the updated `orders` snapshot.
+
+MT5-side V3C execution safety:
+
+- MT5 Algo Trading OFF rejects every `PLACE_ORDER` command and posts `ORDER_RESULT` with `ok=false`.
+- EA live-trading permission OFF rejects every `PLACE_ORDER` command and posts `ORDER_RESULT` with `ok=false`.
+- `RequireStopLossForOrders=true` blocks orders without SL.
+- `MaxAllowedVolume` caps the maximum accepted command volume.
+- `DefaultMagicNumber` is used when a command has no magic number or magic is `0`.
+- Market Buy uses current ask; Market Sell uses current bid.
+- Buy Limit must be below current ask; Sell Limit must be above current bid.
+- Broker stops level, freeze level where relevant, volume min/max/step, and margin checks are validated before `OrderSend`.
+- Duplicate frontend send attempts are blocked after the modal sends once.
+- Backend rejects duplicate order `requestId`s while a command/result is still stored.
+- The EA remembers recently processed order `requestId`s in memory and ignores repeats.
+
+The Trading Monitor also shows pending orders after MT5 reports them in the `orders` payload section. Pending orders use the same `Current symbol only` / `All symbols` filter as positions.
+
+## V3D Trade Management
+
+V3D adds the trade-management interface and the backend/MT5 command path for managing existing positions and pending orders. The frontend sends explicitly confirmed management requests to the backend, the backend queues them for MT5 polling, and MT5 posts a `TRADE_MANAGEMENT_RESULT` back through the WebSocket feed.
+
+Trade-management execution is disabled by default in both the backend and the EA:
+
+- Backend: `ENABLE_TRADE_MANAGEMENT=true` is required before management commands are queued.
+- MT5 EA: `EnableTradeManagement=true` is required before the EA executes management commands.
+- MT5 Algo Trading and EA live-trading permission must also be enabled.
+
+Open position row actions:
+
+- `Close`
+- `Partial Close`
+- `Modify SL/TP`
+- `Breakeven`
+
+Pending order row actions:
+
+- `Cancel`
+- `Modify Order`
+
+Trade-management actions use the same session-based `Trading Mode` safety concept as Order Entry. When Trading Mode is OFF, row action menus can still open preview/validation modals, but final confirmation is disabled and the modal clearly shows `Trading Mode is OFF.` Trading Mode resets when the browser session closes.
+
+Each action opens a compact confirmation modal with a summary table and local validation:
+
+- Full close shows ticket, symbol, type, volume, and floating PnL.
+- Partial close validates volume is greater than `0`, less than current position volume, respects `volumeStep` when available, and leaves a valid remaining volume when `volumeMin` is known.
+- Position SL/TP modification validates buy-side stops below/current take-profit above current price, and sell-side stops above/current take-profit below current price.
+- Breakeven proposes SL from open price plus/minus optional offset points.
+- Pending cancel shows the order summary.
+- Pending modification validates Buy Limit below current ask, Sell Limit above current bid, and SL/TP on the correct side of the new entry.
+
+When confirmed, the frontend sends the action to the matching backend endpoint:
+
+- Full or partial close: `POST /positions/close`
+- Position SL/TP modification: `POST /positions/modify`
+- Breakeven: `POST /positions/breakeven`
+- Pending order cancel: `POST /orders/cancel`
+- Pending order entry/SL/TP modification: `POST /orders/modify`
+
+The modal shows `Sending`, `Queued`, `Waiting for MT5`, `Success`, or `Failed`. On success, wait for the next MT5 snapshot before assuming the positions or orders table has refreshed.
+
+If the backend returns `Trade management commands are disabled on the backend.`, start the backend with `ENABLE_TRADE_MANAGEMENT=true` and enable EA input `EnableTradeManagement=true`. If the EA returns `Trade management disabled in EA inputs.`, update the EA inputs and confirm MT5 Algo Trading is enabled.
+
+Backend command types:
+
+- `CLOSE_POSITION`
+- `MODIFY_POSITION`
+- `MOVE_TO_BREAKEVEN`
+- `CANCEL_ORDER`
+- `MODIFY_ORDER`
+
+MT5 posts results to `/mt5/trade-management-result` and the backend broadcasts `TRADE_MANAGEMENT_RESULT` to WebSocket clients.
+
+V3D intentionally does not add close-all, cancel-all, trailing stop, or automated trade management.
+
+### Enable V3D Management
+
+Use a demo account first. V3D can close, partially close, modify, and cancel real trades when every safety gate is enabled.
+
+Backend management is disabled unless the backend process is started with:
+
+```powershell
+$env:ENABLE_TRADE_MANAGEMENT='true'
+npm start
+```
+
+That environment variable is local to the current PowerShell session. Starting the backend normally keeps management disabled.
+
+EA management is disabled unless the attached EA input is set to:
+
+```text
+EnableTradeManagement = true
+```
+
+The MT5 Algo Trading button and the EA `Allow live trading` permission must also be enabled before MT5 can execute the management command. Frontend `Trading Mode` must be ON for the current browser session, and each action still requires a confirmation modal.
+
+### V3D Manual Demo Checklist
+
+Setup:
+
+1. Start backend with `ENABLE_TRADE_MANAGEMENT=false` or start it normally without the environment variable.
+2. Start frontend.
+3. Attach the EA to EURUSD M15.
+4. Confirm chart, account, positions, and pending orders still update.
+
+Backend disabled:
+
+5. Try a close, modify, or cancel action.
+6. Confirm the backend blocks it with `Trade management commands are disabled on the backend.`
+
+EA disabled:
+
+7. Restart backend with `ENABLE_TRADE_MANAGEMENT=true`.
+8. Keep EA input `EnableTradeManagement=false`.
+9. Try a close, modify, or cancel action.
+10. Confirm MT5 blocks it with `Trade management disabled in EA inputs.`
+
+Enable on demo:
+
+11. Set EA input `EnableTradeManagement=true`.
+12. Open a small demo market position.
+13. Modify SL/TP.
+14. Confirm MT5 updates position SL/TP.
+15. Move SL to breakeven.
+16. Confirm SL changes.
+17. Partial close a small portion.
+18. Confirm position volume reduces.
+19. Close the remaining position.
+20. Confirm the position disappears after the next MT5 snapshot.
+
+Pending orders:
+
+21. Place a Buy Limit using V3C Order Entry.
+22. Modify pending order entry/SL/TP.
+23. Confirm the pending order updates after the next MT5 snapshot.
+24. Cancel the pending order.
+25. Confirm the pending order disappears.
+26. Repeat with a Sell Limit if practical.
+
+Validation:
+
+27. Try invalid SL/TP direction and confirm the frontend or backend blocks it.
+28. Try partial close volume larger than position volume and confirm it is blocked.
+29. Try partial close that would leave invalid remaining volume and confirm it is blocked.
+30. Try modifying an unsupported pending order type if one exists and confirm a clear rejection.
+
+Regression:
+
+31. Confirm Risk Calculator still verifies with MT5.
+32. Confirm Order Entry still places market and limit orders on demo.
+33. Confirm Trading Monitor `Current symbol only` / `All symbols` filter still works.
+34. Confirm chart scroll/zoom sync still works.
+35. Confirm crosshair sync still works.
+36. Confirm draggable chart panel heights still work.
+37. Confirm right panel collapse/resize still works.
+38. Confirm Auto-scroll, Fit content, Go latest, and Reset view still work.
+39. Confirm duplicate command execution does not occur when clicking once and waiting.
+40. Refresh the browser and confirm Trading Mode resets to OFF.
+
+### V3D Known Limitations
+
+- No bulk close.
+- No bulk cancel.
+- No trailing stop.
+- No automated management.
+- Only supported pending order types can be modified. The MT5 EA currently supports modifying Buy Limit and Sell Limit pending orders for V3D.
+- Management results do not immediately mutate the frontend table. The table updates when the next MT5 snapshot arrives.
+
+### V3D Troubleshooting
+
+- `Invalid stops` / retcode `10016`: SL/TP, breakeven SL, or pending entry is too close, on the wrong side, or violates broker stops/freeze levels.
+- `Market closed` / retcode `10018`: the symbol is not currently tradable.
+- `Invalid volume` / retcode `10014`: partial close volume is outside broker min/max/step or would leave an invalid remaining volume.
+- `Trade disabled` / retcode `10017`: trading is disabled for the account, terminal, EA, or symbol.
+- `No money` / retcode `10019`: free margin is insufficient for the requested operation.
+- `Trade management commands are disabled on the backend.`: restart the backend with `ENABLE_TRADE_MANAGEMENT=true`.
+- `Trade management disabled in EA inputs.`: set EA input `EnableTradeManagement=true`, confirm Algo Trading is ON, and confirm live trading is allowed for the EA.
+- No result arrives: confirm the EA is still attached, MT5 WebRequest includes `http://127.0.0.1:3001`, backend is running, and the EA is polling `/mt5/commands`.
+
+### Right Panel Workspace Behavior
+
+The right-side panel is a workspace menu, not a fixed narrow sidebar. It contains:
+
+- `Trading Monitor`
+- `Indicators`
+- `Risk Calculator`
+- `Order Entry`
+
+Panel behavior:
+
+- The panel can be collapsed to give the charts more horizontal space.
+- Expanding restores the previous panel state.
+- The left edge of the panel can be dragged between about `280px` and `560px`.
+- Panel width, collapsed/expanded state, and active section are saved in `localStorage`.
+- The panel header and menu stay visible at the top.
+- Section content scrolls internally when needed.
+- Trading Monitor tables scroll horizontally instead of squeezing columns into unreadable text.
+- Chart instances resize after panel width or collapsed state changes, and the current chart time range is preserved.
+
+### Order Entry Usability Notes
+
+The Order Entry section is intentionally compact because it shares the workspace with the chart. The form is split into:
+
+- `Order`
+- `Volume`
+- `Prices`
+- `Protection`
+- `Execution Safety`
+- `Validation / Result`
+
+The layout uses two columns where the panel is wide enough and falls back to one column when the panel is narrow. The sticky footer keeps `Trading Mode`, validation status, placement status, and `Prepare Order` reachable. Validation messages are compact; multiple issues are grouped into a small expandable block. The confirmation modal uses a compact summary table and keeps `Cancel` and `Send Order` visible.
+
+Order Entry behavior remains unchanged by the layout pass:
+
+- Market Buy uses `ask`.
+- Market Sell uses `bid`.
+- Buy Limit must be below current ask.
+- Sell Limit must be above current bid.
+- `Require SL` still blocks preparation without a valid stop-loss.
+- Manual volume must respect broker min/max/step.
+- Risk Calculator volume requires a current successful MT5 verified result.
+- `Send Order` is available only from the confirmation modal after frontend validation passes and Trading Mode is ON.
+
+### Crosshair Across All Chart Panels
+
+The dashboard uses synchronized crosshair overlays so the same candle/time can be inspected across Price, ATR, ADX/DI, RSI, and future oscillator panels.
+
+- Moving the mouse over any expanded chart panel shows a vertical dashed marker on every expanded chart panel.
+- The marker is synchronized by exact MT5 candle timestamp, not by copying a pixel coordinate from one panel.
+- Each panel converts the selected time to its own x-coordinate with Lightweight Charts `timeScale().timeToCoordinate(time)`.
+- The crosshair data/readout panel continues to show values for the selected candle.
+- The marker clears when the mouse leaves the whole chart area.
+- Scroll, zoom, chart panel resizing, and right panel collapse/expand update the overlay positions without desynchronizing the time scales.
+
+Common order troubleshooting:
+
+- `MT5 Algo Trading is disabled`: turn on the Algo Trading button in MT5 when testing on demo.
+- `Live trading is not allowed for this EA`: allow live trading for the EA in MT5 Expert properties.
+- `Trading is disabled for this account` or `Expert trading is disabled for this account`: check account/broker permissions.
+- `Invalid stops` / retcode `10016`: SL/TP or pending entry is too close, on the wrong side, or violates broker stop-level rules.
+- `Invalid volume` / retcode `10014`: volume is outside broker min/max/step or above the EA `MaxAllowedVolume`.
+- `Market closed` / retcode `10018`: the symbol is not currently tradable.
+- `No money` / retcode `10019`: free margin is insufficient for the requested order.
+- `Price changed` / retcode `10020` or `Requote` / retcode `10004`: market moved before execution; refresh quote and prepare again.
+- `Trade disabled` / retcode `10017`: trading is disabled for the account, terminal, or symbol.
+
+Manual V3C demo-account checklist:
+
+1. Start backend normally with `npm start`.
+2. Keep MT5 Algo Trading OFF.
+3. Try to send an order and confirm MT5 blocks it with `ORDER_RESULT ok=false`.
+4. Turn MT5 Algo Trading ON on a demo account.
+5. Confirm live trading is allowed for the attached EA.
+6. Send a small Market Buy with SL/TP.
+7. Confirm `ORDER_RESULT` success or clear failure.
+8. Confirm the position appears in Trading Monitor.
+9. Send a small Market Sell with SL/TP if appropriate.
+10. Place a Buy Limit below market with SL/TP.
+11. Confirm pending order appears in Trading Monitor.
+12. Place a Sell Limit above market with SL/TP.
+13. Confirm pending order appears in Trading Monitor.
+14. Try invalid Buy Limit above market and confirm rejection.
+15. Try invalid Sell Limit below market and confirm rejection.
+16. Try missing SL when Require SL is enabled and confirm rejection.
+17. Try volume above `MaxAllowedVolume` and confirm rejection.
+18. Refresh browser and confirm Trading Mode resets to OFF.
+19. Confirm Risk Calculator still works.
+20. Confirm chart, crosshair sync, panel resize, and Trading Monitor still work.
+
+## Regression Checklist After UI/Layout Changes
+
+Use this checklist after changing Order Entry, the right panel, or chart crosshair synchronization.
+
+Order Entry UI:
+
+1. At 100% browser zoom, all fields are readable.
+2. At 90% and 75% browser zoom, fields remain readable and do not clip.
+3. `Prepare Order` remains reachable in the sticky footer.
+4. `Trading Mode` status remains visible.
+5. Validation messages stay compact and do not consume excessive vertical space.
+6. The confirmation modal is readable and shows a compact order summary.
+7. `Send Order` is only available from the confirmation modal.
+8. Market Buy uses ask and Market Sell uses bid.
+9. Buy Limit and Sell Limit validation still works.
+10. `Require SL` still works.
+11. Manual volume validation still works.
+12. Risk Calculator verified volume still works.
+
+Right panel:
+
+1. Switch between `Trading Monitor`, `Indicators`, `Risk Calculator`, and `Order Entry`.
+2. Collapse the panel and confirm charts gain space.
+3. Expand the panel and confirm the previous section/state is restored.
+4. Drag the panel left edge and confirm width is clamped between about `280px` and `560px`.
+5. Refresh the browser and confirm panel width and collapsed state persist.
+6. Confirm chart area resizes after panel changes.
+7. Confirm no layout overlap or clipped fields.
+8. Confirm Trading Monitor tables scroll horizontally when needed.
+
+Crosshair:
+
+1. Hover Price and confirm the vertical marker appears on Price, ATR, ADX/DI, and RSI.
+2. Hover ATR and confirm the marker appears on Price, ATR, ADX/DI, and RSI.
+3. Hover ADX/DI and confirm the marker appears on Price, ATR, ADX/DI, and RSI.
+4. Hover RSI and confirm the marker appears on Price, ATR, ADX/DI, and RSI.
+5. Confirm the crosshair data/readout values match the selected candle.
+6. Scroll and zoom, then confirm the marker remains aligned by candle time.
+7. Drag chart panel height handles and confirm the marker remains aligned.
+8. Collapse/expand the right panel and confirm the marker remains aligned.
+
+Trading safety:
+
+1. Frontend Trading Mode OFF blocks order preparation/sending.
+2. Backend rejects order requests that do not include dashboard confirmation flags.
+3. MT5 Algo Trading OFF or EA live-trading permission OFF blocks execution in MT5.
+4. Duplicate order sends are blocked by the modal/backend request ID checks.
+5. With backend `ENABLE_TRADE_MANAGEMENT` disabled, confirm management actions are rejected.
+6. With EA `EnableTradeManagement` disabled, confirm management actions are rejected by MT5.
+7. Confirm no close-all, cancel-all, trailing-stop, or automated-management controls exist.
+
+Existing features:
+
+1. Chart data still updates from MT5.
+2. Account data still updates.
+3. Open positions still update.
+4. Pending orders still display.
+5. Risk Calculator still verifies with MT5.
+6. Auto-scroll still works.
+7. `Fit content`, `Go to latest`, and `Reset view` still work.
+8. Draggable chart panel heights still work.
+
 ## V2B Manual Testing Checklist
 
 1. Start backend.
@@ -472,6 +897,8 @@ npm run dev
 - `WebRequest failed` in MT5: add `http://127.0.0.1:3001` to MT5 WebRequest allowed URLs.
 - `No MT5 verification response received`: start the backend, keep the EA attached, and confirm `EnableRiskCalculatorCommands` is enabled in EA inputs.
 - `Failed to fetch` or `Could not reach backend risk endpoint`: restart the backend after updating, confirm it is listening on `http://127.0.0.1:3001`, then refresh the browser.
+- `MT5 Algo Trading is disabled`: turn on the Algo Trading button in MT5 when testing on demo, then prepare a new order.
+- `Live trading is not allowed for this EA`: allow live trading in the EA properties and confirm AutoTrading is enabled.
 - `Invalid WebRequest URL`: MT5 must allow exactly `http://127.0.0.1:3001`, not only the individual endpoint URLs.
 - `Waiting for account data` or `Waiting for quote data`: keep MT5 open and logged in, attach the EA to a live chart, and wait for the next timer update.
 - `Invalid symbol properties`: the broker did not provide valid tick size, tick value, or volume step for the symbol. Confirm the symbol is selected and tradable in MT5 Market Watch.
@@ -481,8 +908,12 @@ npm run dev
 - Dashboard mirrors only the chart where EA is attached.
 - Indicators are controlled from MT5 EA inputs, not the browser.
 - Account, quote, and position monitor fields are read-only.
+- Pending order monitor fields are read-only.
 - Risk Calculator frontend results are preliminary estimates until `Verify with MT5` returns.
 - MT5 risk verification is calculation-only and depends on the EA polling `/mt5/commands`.
+- V3C order entry and V3D trade management are controlled by MT5 Algo Trading, EA live-trading permission, account permissions, frontend Trading Mode, and the relevant backend/EA safety gates.
+- V3D supports only individual position/order management actions. No bulk close, bulk cancel, trailing stop, or automated management exists.
+- V3D pending order modification currently supports only supported pending order types, primarily Buy Limit and Sell Limit.
 - Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
 - Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.
 - Panel height presets and dragged panel heights are browser-local UI preferences.
@@ -490,7 +921,7 @@ npm run dev
 - Only closed candles are displayed.
 - MT5 must be open and logged in.
 - Broker candle data may differ from TradingView.
-- V3A/V3B are read-only and do not place, close, or modify trades yet.
+- V3A monitor and V3B risk verification remain non-execution features. V3C order placement is limited to explicitly confirmed market/limit entry only.
 
 ## Future Improvements
 

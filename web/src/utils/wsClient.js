@@ -1,6 +1,16 @@
 const RECONNECT_DELAY_MS = 1500;
 
-export function createDashboardSocket({ url, onOpen, onClose, onError, onReconnect, onSnapshot, onRiskResult }) {
+export function createDashboardSocket({
+  url,
+  onOpen,
+  onClose,
+  onError,
+  onReconnect,
+  onSnapshot,
+  onRiskResult,
+  onOrderResult,
+  onTradeManagementResult
+}) {
   let socket = null;
   let closedByClient = false;
   let reconnectTimer = null;
@@ -28,6 +38,14 @@ export function createDashboardSocket({ url, onOpen, onClose, onError, onReconne
 
       if (message?.type === 'RISK_LOT_RESULT') {
         onRiskResult?.(message);
+      }
+
+      if (message?.type === 'ORDER_RESULT') {
+        onOrderResult?.(message.payload || message);
+      }
+
+      if (message?.type === 'TRADE_MANAGEMENT_RESULT') {
+        onTradeManagementResult?.(message.payload || message);
       }
     });
 

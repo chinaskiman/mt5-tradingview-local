@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import TradingDashboard from './chart/TradingDashboard.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import IndicatorSettings from './components/IndicatorSettings.jsx';
+import OrderEntry from './components/OrderEntry.jsx';
 import RiskCalculator from './components/RiskCalculator.jsx';
 import TradingMonitor from './components/TradingMonitor.jsx';
 import { createDashboardSocket } from './utils/wsClient.js';
@@ -10,9 +11,15 @@ const WS_URL = import.meta.env.VITE_DASHBOARD_WS_URL || 'ws://127.0.0.1:3001';
 const API_URL = import.meta.env.VITE_DASHBOARD_API_URL || wsToHttpUrl(WS_URL);
 const PREFS_KEY = 'mt5-dashboard-ui-preferences';
 const RISK_VERIFICATION_TIMEOUT_MS = 30000;
+const ORDER_PLACEMENT_TIMEOUT_MS = 30000;
+const TRADE_MANAGEMENT_TIMEOUT_MS = 30000;
+const DEFAULT_SIDE_PANEL_WIDTH = 390;
+const MIN_SIDE_PANEL_WIDTH = 280;
+const MAX_SIDE_PANEL_WIDTH = 560;
 const DEFAULT_PREFS = {
   sidePanelOpen: true,
   sidePanelActive: 'monitor',
+  sidePanelWidth: DEFAULT_SIDE_PANEL_WIDTH,
   tradingMonitorFilter: 'current',
   riskCalculator: {
     riskBasis: 'equity',
@@ -24,6 +31,17 @@ const DEFAULT_PREFS = {
     stopLossMode: 'price',
     stopLossPrice: '',
     stopDistancePoints: 100
+  },
+  orderEntry: {
+    orderType: 'marketBuy',
+    volumeMode: 'risk',
+    manualVolume: '',
+    entryPrice: '',
+    requireStopLoss: true,
+    stopLossPrice: '',
+    takeProfitPrice: '',
+    comment: '',
+    magicNumber: 2026001
   },
   autoScroll: true,
   layoutPreset: 'balanced',
@@ -60,6 +78,21 @@ export default function App() {
     status: 'idle',
     requestId: null,
     requestSignature: null,
+    result: null,
+    error: null
+  });
+  const [orderPlacement, setOrderPlacement] = useState({
+    status: 'idle',
+    requestId: null,
+    result: null,
+    error: null,
+    warnings: []
+  });
+  const [tradeManagement, setTradeManagement] = useState({
+    status: 'idle',
+    requestId: null,
+    contextKey: null,
+    commandType: null,
     result: null,
     error: null
   });
@@ -105,6 +138,39 @@ export default function App() {
             error: result?.ok ? null : result?.error || 'MT5 risk calculation failed.'
           };
         });
+      },
+      onOrderResult: (result) => {
+        setOrderPlacement((current) => {
+          if (!current.requestId || result?.requestId !== current.requestId) {
+            return current;
+          }
+
+          const successStatus = result?.orderKind === 'LIMIT' ? 'placed' : 'filled';
+
+          return {
+            ...current,
+            status: result?.ok ? successStatus : 'failed',
+            requestId: result?.requestId || current.requestId,
+            result,
+            error: result?.ok ? null : result?.message || 'MT5 order placement failed.'
+          };
+        });
+      },
+      onTradeManagementResult: (result) => {
+        setTradeManagement((current) => {
+          if (!current.requestId || result?.requestId !== current.requestId) {
+            return current;
+          }
+
+          return {
+            ...current,
+            status: result?.ok ? 'success' : 'failed',
+            requestId: result?.requestId || current.requestId,
+            commandType: result?.commandType || current.commandType,
+            result,
+            error: result?.ok ? null : result?.message || 'MT5 trade-management command failed.'
+          };
+        });
       }
     });
 
@@ -137,6 +203,52 @@ export default function App() {
 
     return () => window.clearTimeout(timeout);
   }, [riskVerification.status, riskVerification.requestId]);
+
+  useEffect(() => {
+    if (!['sending', 'queued', 'waiting'].includes(orderPlacement.status) || !orderPlacement.requestId) {
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setOrderPlacement((current) => {
+        if (current.requestId !== orderPlacement.requestId || !['sending', 'queued', 'waiting'].includes(current.status)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: 'failed',
+          result: null,
+          error: 'No MT5 order response received. Check that the EA is running, command polling is enabled, and MT5 Algo Trading is ON.'
+        };
+      });
+    }, ORDER_PLACEMENT_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [orderPlacement.status, orderPlacement.requestId]);
+
+  useEffect(() => {
+    if (!['sending', 'queued', 'waiting'].includes(tradeManagement.status) || !tradeManagement.requestId) {
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setTradeManagement((current) => {
+        if (current.requestId !== tradeManagement.requestId || !['sending', 'queued', 'waiting'].includes(current.status)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: 'failed',
+          result: null,
+          error: 'No MT5 trade-management response received. Check that the EA is running, command polling is enabled, backend ENABLE_TRADE_MANAGEMENT=true, and EA EnableTradeManagement=true.'
+        };
+      });
+    }, TRADE_MANAGEMENT_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [tradeManagement.status, tradeManagement.requestId]);
 
   const meta = useMemo(() => ({
     symbol: snapshot?.symbol || '--',
@@ -232,6 +344,110 @@ export default function App() {
     }
   }
 
+  async function requestOrderPlacement(payload) {
+    const requestId = createRequestId('order');
+    const requestBody = {
+      ...payload,
+      requestId
+    };
+
+    setOrderPlacement({ status: 'sending', requestId, result: null, error: null, warnings: [] });
+
+    try {
+      const response = await fetch(`${API_URL}/orders/place`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const body = await response.json().catch(() => null);
+
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.error || `Order placement request failed with HTTP ${response.status}`);
+      }
+
+      setOrderPlacement({
+        status: 'queued',
+        requestId,
+        result: null,
+        error: null,
+        warnings: Array.isArray(body.warnings) ? body.warnings : []
+      });
+
+      window.setTimeout(() => {
+        setOrderPlacement((current) => (
+          current.requestId === requestId && current.status === 'queued'
+            ? { ...current, status: 'waiting' }
+            : current
+        ));
+      }, 350);
+    } catch (error) {
+      setOrderPlacement({
+        status: 'failed',
+        requestId,
+        result: null,
+        error: formatOrderRequestError(error),
+        warnings: []
+      });
+    }
+  }
+
+  async function requestTradeManagement(payload) {
+    const requestId = createRequestId('management');
+    const { endpoint, commandType, contextKey, body } = payload;
+    const requestBody = {
+      ...body,
+      requestId
+    };
+
+    setTradeManagement({
+      status: 'sending',
+      requestId,
+      contextKey,
+      commandType,
+      result: null,
+      error: null
+    });
+
+    try {
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const responseBody = await response.json().catch(() => null);
+
+      if (!response.ok || !responseBody?.ok) {
+        throw new Error(responseBody?.error || `Trade-management request failed with HTTP ${response.status}`);
+      }
+
+      setTradeManagement({
+        status: 'queued',
+        requestId,
+        contextKey,
+        commandType,
+        result: null,
+        error: null
+      });
+
+      window.setTimeout(() => {
+        setTradeManagement((current) => (
+          current.requestId === requestId && current.status === 'queued'
+            ? { ...current, status: 'waiting' }
+            : current
+        ));
+      }, 350);
+    } catch (error) {
+      setTradeManagement({
+        status: 'failed',
+        requestId,
+        contextKey,
+        commandType,
+        result: null,
+        error: formatTradeManagementRequestError(error)
+      });
+    }
+  }
+
   return (
     <main className="app-shell">
       <StatusBar
@@ -252,7 +468,10 @@ export default function App() {
         </div>
       ) : null}
 
-      <section className={`workspace ${uiPrefs.sidePanelOpen ? '' : 'is-side-panel-collapsed'}`}>
+      <section
+        className={`workspace ${uiPrefs.sidePanelOpen ? '' : 'is-side-panel-collapsed'}`}
+        style={{ '--side-panel-width': `${uiPrefs.sidePanelWidth}px` }}
+      >
         <TradingDashboard
           snapshot={snapshot}
           autoScroll={uiPrefs.autoScroll}
@@ -269,7 +488,9 @@ export default function App() {
         <SidePanel
           open={uiPrefs.sidePanelOpen}
           active={uiPrefs.sidePanelActive}
+          width={uiPrefs.sidePanelWidth}
           onToggleOpen={() => updatePreference('sidePanelOpen', !uiPrefs.sidePanelOpen)}
+          onWidthChange={(value) => updatePreference('sidePanelWidth', value)}
           onActiveChange={(value) => setUiPrefs((current) => ({
             ...current,
             sidePanelOpen: true,
@@ -281,6 +502,8 @@ export default function App() {
               snapshot={snapshot}
               filter={uiPrefs.tradingMonitorFilter}
               onFilterChange={(value) => updatePreference('tradingMonitorFilter', value)}
+              tradeManagement={tradeManagement}
+              onSendTradeManagement={requestTradeManagement}
             />
           ) : null}
           {uiPrefs.sidePanelActive === 'indicators' ? (
@@ -301,6 +524,17 @@ export default function App() {
               onVerify={requestRiskVerification}
             />
           ) : null}
+          {uiPrefs.sidePanelActive === 'order' ? (
+            <OrderEntry
+              snapshot={snapshot}
+              prefs={uiPrefs.orderEntry}
+              onPrefsChange={(value) => updatePreference('orderEntry', value)}
+              riskPrefs={uiPrefs.riskCalculator}
+              riskVerification={riskVerification}
+              orderPlacement={orderPlacement}
+              onSendOrder={requestOrderPlacement}
+            />
+          ) : null}
         </SidePanel>
       </section>
     </main>
@@ -316,8 +550,10 @@ function loadPreferences() {
       ...parsed,
       sidePanelOpen: parsed?.sidePanelOpen !== false,
       sidePanelActive: normalizeSidePanelActive(parsed?.sidePanelActive),
+      sidePanelWidth: clamp(Number(parsed?.sidePanelWidth), MIN_SIDE_PANEL_WIDTH, MAX_SIDE_PANEL_WIDTH, DEFAULT_SIDE_PANEL_WIDTH),
       tradingMonitorFilter: normalizeTradingMonitorFilter(parsed?.tradingMonitorFilter),
       riskCalculator: normalizeRiskCalculatorPrefs(parsed?.riskCalculator),
+      orderEntry: normalizeOrderEntryPrefs(parsed?.orderEntry),
       autoScroll: parsed?.autoScroll !== false,
       layoutPreset: normalizeLayoutPreset(parsed?.layoutPreset),
       chartSpacing: clamp(Number(parsed?.chartSpacing), 3, 14),
@@ -345,7 +581,7 @@ function normalizeTradingMonitorFilter(value) {
 }
 
 function normalizeSidePanelActive(value) {
-  return ['monitor', 'indicators', 'risk'].includes(value) ? value : DEFAULT_PREFS.sidePanelActive;
+  return ['monitor', 'indicators', 'risk', 'order'].includes(value) ? value : DEFAULT_PREFS.sidePanelActive;
 }
 
 function normalizeRiskCalculatorPrefs(value) {
@@ -361,6 +597,22 @@ function normalizeRiskCalculatorPrefs(value) {
     stopLossMode: ['price', 'points'].includes(value?.stopLossMode) ? value.stopLossMode : defaults.stopLossMode,
     stopLossPrice: normalizeTextInput(value?.stopLossPrice),
     stopDistancePoints: normalizePositiveInput(value?.stopDistancePoints, defaults.stopDistancePoints)
+  };
+}
+
+function normalizeOrderEntryPrefs(value) {
+  const defaults = DEFAULT_PREFS.orderEntry;
+
+  return {
+    orderType: ['marketBuy', 'marketSell', 'buyLimit', 'sellLimit'].includes(value?.orderType) ? value.orderType : defaults.orderType,
+    volumeMode: ['risk', 'manual'].includes(value?.volumeMode) ? value.volumeMode : defaults.volumeMode,
+    manualVolume: normalizeTextInput(value?.manualVolume),
+    entryPrice: normalizeTextInput(value?.entryPrice),
+    requireStopLoss: value?.requireStopLoss !== false,
+    stopLossPrice: normalizeTextInput(value?.stopLossPrice),
+    takeProfitPrice: normalizeTextInput(value?.takeProfitPrice),
+    comment: normalizeTextInput(value?.comment),
+    magicNumber: normalizeIntegerInput(value?.magicNumber, defaults.magicNumber)
   };
 }
 
@@ -394,16 +646,21 @@ function normalizeTextInput(value) {
   return String(value);
 }
 
+function normalizeIntegerInput(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.trunc(numeric) : fallback;
+}
+
 function wsToHttpUrl(url) {
   return url.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
 }
 
-function createRequestId() {
+function createRequestId(prefix = 'risk') {
   if (window.crypto?.randomUUID) {
     return window.crypto.randomUUID();
   }
 
-  return `risk-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function createRiskRequestSignature(payload) {
@@ -428,15 +685,86 @@ function formatRiskRequestError(error) {
   return message || 'Risk calculation request failed.';
 }
 
-function SidePanel({ open, active, onToggleOpen, onActiveChange, children }) {
+function formatOrderRequestError(error) {
+  const message = error instanceof Error ? error.message : '';
+
+  if (message === 'Failed to fetch') {
+    return 'Could not reach backend order endpoint. Check that the backend is running, then refresh the browser and try again.';
+  }
+
+  return message || 'Order placement request failed.';
+}
+
+function formatTradeManagementRequestError(error) {
+  const message = error instanceof Error ? error.message : '';
+
+  if (message === 'Failed to fetch') {
+    return 'Could not reach backend trade-management endpoint. Check that the backend is running, then refresh the browser and try again.';
+  }
+
+  return message || 'Trade-management request failed.';
+}
+
+function SidePanel({ open, active, width, onToggleOpen, onWidthChange, onActiveChange, children }) {
+  const resizeRef = useRef(null);
   const tabs = [
     ['monitor', 'Trading Monitor', 'Monitor'],
     ['indicators', 'Indicators', 'Ind'],
-    ['risk', 'Risk Calculator', 'Risk']
+    ['risk', 'Risk Calculator', 'Risk'],
+    ['order', 'Order Entry', 'Order']
   ];
+
+  useEffect(() => () => {
+    const listeners = resizeRef.current?.listeners;
+    if (listeners) {
+      window.removeEventListener('pointermove', listeners.move);
+      window.removeEventListener('pointerup', listeners.stop);
+      window.removeEventListener('pointercancel', listeners.stop);
+    }
+    document.body.classList.remove('is-resizing-side-panel');
+  }, []);
+
+  function startResize(event) {
+    if (!open || (event.button !== undefined && event.button !== 0)) {
+      return;
+    }
+
+    event.preventDefault();
+    const listeners = {
+      move: (moveEvent) => {
+        const delta = event.clientX - moveEvent.clientX;
+        const nextWidth = clamp(width + delta, MIN_SIDE_PANEL_WIDTH, MAX_SIDE_PANEL_WIDTH, DEFAULT_SIDE_PANEL_WIDTH);
+        onWidthChange(Math.round(nextWidth));
+      },
+      stop: () => {
+        window.removeEventListener('pointermove', listeners.move);
+        window.removeEventListener('pointerup', listeners.stop);
+        window.removeEventListener('pointercancel', listeners.stop);
+        document.body.classList.remove('is-resizing-side-panel');
+        resizeRef.current = null;
+        window.dispatchEvent(new Event('resize'));
+      }
+    };
+
+    resizeRef.current = { listeners };
+    document.body.classList.add('is-resizing-side-panel');
+    window.addEventListener('pointermove', listeners.move);
+    window.addEventListener('pointerup', listeners.stop, { once: true });
+    window.addEventListener('pointercancel', listeners.stop, { once: true });
+  }
 
   return (
     <aside className={`side-panel ${open ? '' : 'is-collapsed'}`} aria-label="Dashboard side panel">
+      {open ? (
+        <div
+          className="side-panel-width-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize right panel"
+          title="Drag to resize right panel"
+          onPointerDown={startResize}
+        />
+      ) : null}
       <div className="side-panel-tabs" role="tablist" aria-label="Dashboard sections">
         <button
           type="button"

@@ -14,17 +14,36 @@
    4. Compile this EA and attach it to the chart you want to mirror.
 
    The web dashboard mirrors only the chart where this EA is attached.
-   V1/V3A/V3B is view/read-only. This EA does not place, modify, or close trades.
+   V1/V3A/V3B is view/read-only.
    V3A only adds read-only account, quote, symbol property, and open position
    monitor data to the local dashboard payload.
    V3B can poll local calculator commands and return broker-normalized lot-size
    estimates. This command path is calculation-only, not a trading path.
+
+   V3C can process PLACE_ORDER commands. Real order execution is controlled by
+   MT5 trade permissions: the Algo Trading button must be enabled, live trading
+   must be allowed for this EA, and the account must allow expert trading. This
+   version supports only market and limit entries.
+
+   V3D trade-management commands are disabled by default. EnableTradeManagement
+   must be explicitly set to true before this EA will close positions, modify
+   SL/TP, move stops to breakeven, cancel pending orders, or modify pending
+   orders. Bulk close/cancel, trailing stops, and automated management are not
+   implemented.
+
+   The monitor payload also includes read-only active pending orders. This is
+   for display only unless EnableTradeManagement is explicitly enabled.
 */
 
 input int    HistoryBars   = 500;
 input string ServerUrl     = "http://127.0.0.1:3001/mt5/update";
 input int    UpdateSeconds = 2;
 input bool   EnableRiskCalculatorCommands = true;
+input int    MaxDeviationPoints = 20;
+input double MaxAllowedVolume = 5.0;
+input bool   RequireStopLossForOrders = true;
+input int    DefaultMagicNumber = 2026001;
+input bool   EnableTradeManagement = false;
 
 input bool EnableSMAFast = true;
 input int  SMAFastLength = 7;
@@ -55,6 +74,43 @@ int rsiHandle     = INVALID_HANDLE;
 
 datetime lastAttemptedClosedTime = 0;
 bool sendOnStartup = true;
+string processedOrderRequestIds[];
+const int MAX_PROCESSED_ORDER_IDS = 100;
+string processedTradeManagementRequestIds[];
+const int MAX_PROCESSED_TRADE_MANAGEMENT_IDS = 100;
+
+struct PlaceOrderCommand
+{
+   string requestId;
+   string symbol;
+   string orderKind;
+   string side;
+   double volume;
+   double entryPrice;
+   double sl;
+   double tp;
+   bool slProvided;
+   bool tpProvided;
+   string comment;
+   long magic;
+};
+
+struct TradeManagementCommand
+{
+   string requestId;
+   string commandType;
+   string symbol;
+   ulong ticket;
+   double volume;
+   bool volumeProvided;
+   double sl;
+   bool slProvided;
+   double tp;
+   bool tpProvided;
+   double entryPrice;
+   bool entryPriceProvided;
+   double offsetPoints;
+};
 
 int OnInit()
 {
@@ -102,8 +158,7 @@ void OnTimer()
 {
    SendIfNeeded();
 
-   if(EnableRiskCalculatorCommands)
-      PollRiskCalculatorCommands();
+   PollBackendCommands();
 }
 
 void OnTick()
@@ -304,7 +359,8 @@ string BuildSnapshotJson(const datetime newestClosedTime, const bool chartUpdate
 
    json += "\"account\":" + BuildAccountJson() + ",";
    json += "\"quote\":" + BuildQuoteJson() + ",";
-   json += "\"positions\":" + BuildPositionsJson();
+   json += "\"positions\":" + BuildPositionsJson() + ",";
+   json += "\"orders\":" + BuildOrdersJson();
    json += "}";
    return json;
 }
@@ -406,6 +462,78 @@ string PositionTypeToString(const long positionType)
    return "UNKNOWN";
 }
 
+string BuildOrdersJson()
+{
+   string json = "[";
+   int emitted = 0;
+
+   // Read-only pending order monitor data. This loop only reads active
+   // pending orders. It does not cancel or modify orders.
+   for(int i = 0; i < OrdersTotal(); i++)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(!OrderSelect(ticket))
+      {
+         Print("OrderSelect failed for ticket ", ticket, ". Error: ", GetLastError());
+         continue;
+      }
+
+      long orderType = OrderGetInteger(ORDER_TYPE);
+      if(!IsPendingOrderType(orderType))
+         continue;
+
+      if(emitted > 0)
+         json += ",";
+
+      json += "{";
+      json += "\"ticket\":" + IntegerToString((long)ticket) + ",";
+      json += "\"symbol\":" + JsonString(OrderGetString(ORDER_SYMBOL)) + ",";
+      json += "\"type\":" + JsonString(OrderTypeToString(orderType)) + ",";
+      json += "\"volumeInitial\":" + JsonNumber(OrderGetDouble(ORDER_VOLUME_INITIAL), 8) + ",";
+      json += "\"volumeCurrent\":" + JsonNumber(OrderGetDouble(ORDER_VOLUME_CURRENT), 8) + ",";
+      json += "\"openPrice\":" + JsonNumber(OrderGetDouble(ORDER_PRICE_OPEN), JSON_DECIMALS) + ",";
+      json += "\"sl\":" + JsonNumber(OrderGetDouble(ORDER_SL), JSON_DECIMALS) + ",";
+      json += "\"tp\":" + JsonNumber(OrderGetDouble(ORDER_TP), JSON_DECIMALS) + ",";
+      json += "\"openTime\":" + IntegerToString((long)OrderGetInteger(ORDER_TIME_SETUP)) + ",";
+      json += "\"expirationTime\":" + IntegerToString((long)OrderGetInteger(ORDER_TIME_EXPIRATION)) + ",";
+      json += "\"magic\":" + IntegerToString((long)OrderGetInteger(ORDER_MAGIC)) + ",";
+      json += "\"comment\":" + JsonString(OrderGetString(ORDER_COMMENT));
+      json += "}";
+
+      emitted++;
+   }
+
+   json += "]";
+   return json;
+}
+
+bool IsPendingOrderType(const long orderType)
+{
+   return orderType == ORDER_TYPE_BUY_LIMIT ||
+          orderType == ORDER_TYPE_SELL_LIMIT ||
+          orderType == ORDER_TYPE_BUY_STOP ||
+          orderType == ORDER_TYPE_SELL_STOP ||
+          orderType == ORDER_TYPE_BUY_STOP_LIMIT ||
+          orderType == ORDER_TYPE_SELL_STOP_LIMIT;
+}
+
+string OrderTypeToString(const long orderType)
+{
+   switch((ENUM_ORDER_TYPE)orderType)
+   {
+      case ORDER_TYPE_BUY_LIMIT:       return "BUY_LIMIT";
+      case ORDER_TYPE_SELL_LIMIT:      return "SELL_LIMIT";
+      case ORDER_TYPE_BUY_STOP:        return "BUY_STOP";
+      case ORDER_TYPE_SELL_STOP:       return "SELL_STOP";
+      case ORDER_TYPE_BUY_STOP_LIMIT:  return "BUY_STOP_LIMIT";
+      case ORDER_TYPE_SELL_STOP_LIMIT: return "SELL_STOP_LIMIT";
+      default:                         return EnumToString((ENUM_ORDER_TYPE)orderType);
+   }
+}
+
 int CopyEnabledBuffer(const bool enabled,
                       const int handle,
                       const int bufferIndex,
@@ -474,7 +602,7 @@ bool SendJson(const string payload, const datetime newestClosedTime)
    return true;
 }
 
-void PollRiskCalculatorCommands()
+void PollBackendCommands()
 {
    string url = ServerBaseUrl() + "/mt5/commands";
    char body[];
@@ -485,13 +613,13 @@ void PollRiskCalculatorCommands()
    int status = WebRequest("GET", url, "", 5000, body, response, responseHeaders);
    if(status == -1)
    {
-      Print("Risk calculator command poll failed. Error: ", GetLastError());
+      Print("Backend command poll failed. Error: ", GetLastError());
       return;
    }
 
    if(status < 200 || status >= 300)
    {
-      Print("Risk calculator command poll returned HTTP ", status, ".");
+      Print("Backend command poll returned HTTP ", status, ".");
       return;
    }
 
@@ -500,7 +628,39 @@ void PollRiskCalculatorCommands()
    int commandCount = ExtractJsonObjectsFromArray(responseText, "commands", commands);
 
    for(int i = 0; i < commandCount; i++)
-      ProcessRiskCalculatorCommand(commands[i]);
+      ProcessBackendCommand(commands[i]);
+}
+
+void ProcessBackendCommand(const string commandJson)
+{
+   string type = JsonGetStringValue(commandJson, "type");
+
+   if(type == "CALCULATE_RISK_LOT")
+   {
+      if(EnableRiskCalculatorCommands)
+         ProcessRiskCalculatorCommand(commandJson);
+      else
+         PostDisabledRiskCalculatorResult(commandJson);
+      return;
+   }
+
+   if(type == "PLACE_ORDER")
+   {
+      ProcessPlaceOrderCommand(commandJson);
+      return;
+   }
+
+   if(IsTradeManagementCommandType(type))
+   {
+      if(EnableTradeManagement)
+         ProcessTradeManagementCommand(commandJson, type);
+      else
+         PostDisabledTradeManagementResult(commandJson, type);
+      return;
+   }
+
+   if(type != "")
+      Print("Unknown backend command ignored: ", type);
 }
 
 void ProcessRiskCalculatorCommand(const string commandJson)
@@ -530,6 +690,990 @@ void ProcessRiskCalculatorCommand(const string commandJson)
 
    if(!PostRiskCalculatorResult(result))
       Print("Failed to post risk calculator result for request ", requestId);
+}
+
+void PostDisabledRiskCalculatorResult(const string commandJson)
+{
+   string requestId = JsonGetStringValue(commandJson, "requestId");
+   if(requestId == "")
+   {
+      Print("Risk calculator command ignored: missing requestId.");
+      return;
+   }
+
+   string warnings[];
+   string result = BuildRiskErrorJson(requestId, "Risk calculator commands disabled in EA inputs.", warnings);
+   PostRiskCalculatorResult(result);
+}
+
+void ProcessPlaceOrderCommand(const string commandJson)
+{
+   PlaceOrderCommand command;
+   command.requestId = JsonGetStringValue(commandJson, "requestId");
+   command.symbol = JsonGetStringValue(commandJson, "symbol");
+   command.orderKind = JsonGetStringValue(commandJson, "orderKind");
+   command.side = JsonGetStringValue(commandJson, "side");
+   command.volume = JsonGetDoubleValue(commandJson, "volume");
+   command.entryPrice = JsonGetDoubleValue(commandJson, "entryPrice");
+   command.sl = JsonGetDoubleValue(commandJson, "sl");
+   command.tp = JsonGetDoubleValue(commandJson, "tp");
+   command.slProvided = JsonHasUsableNumber(commandJson, "sl") && command.sl > 0;
+   command.tpProvided = JsonHasUsableNumber(commandJson, "tp") && command.tp > 0;
+   command.comment = JsonGetStringValue(commandJson, "comment");
+   command.magic = (long)JsonGetDoubleValue(commandJson, "magic");
+
+   if(command.requestId == "")
+   {
+      Print("PLACE_ORDER command ignored: missing requestId.");
+      return;
+   }
+
+   if(IsProcessedOrderRequest(command.requestId))
+   {
+      Print("Duplicate PLACE_ORDER command ignored. requestId: ", command.requestId);
+      return;
+   }
+
+   RememberProcessedOrderRequest(command.requestId);
+
+   string result = ExecutePlaceOrder(command);
+   if(!PostOrderResult(result))
+      Print("Failed to post order result for request ", command.requestId);
+}
+
+bool IsTradeManagementCommandType(const string type)
+{
+   return type == "CLOSE_POSITION" ||
+          type == "MODIFY_POSITION" ||
+          type == "MOVE_TO_BREAKEVEN" ||
+          type == "CANCEL_ORDER" ||
+          type == "MODIFY_ORDER";
+}
+
+void ProcessTradeManagementCommand(const string commandJson, const string commandType)
+{
+   TradeManagementCommand command;
+   command.requestId = JsonGetStringValue(commandJson, "requestId");
+   command.commandType = commandType;
+   command.symbol = JsonGetStringValue(commandJson, "symbol");
+   command.ticket = JsonGetTicketValue(commandJson, "ticket");
+   command.volume = JsonGetDoubleValue(commandJson, "volume");
+   command.volumeProvided = JsonHasUsableNumber(commandJson, "volume") && command.volume > 0;
+   command.sl = JsonGetDoubleValue(commandJson, "sl");
+   command.slProvided = JsonHasUsableNumber(commandJson, "sl") && command.sl > 0;
+   command.tp = JsonGetDoubleValue(commandJson, "tp");
+   command.tpProvided = JsonHasUsableNumber(commandJson, "tp") && command.tp > 0;
+   command.entryPrice = JsonGetDoubleValue(commandJson, "entryPrice");
+   command.entryPriceProvided = JsonHasUsableNumber(commandJson, "entryPrice") && command.entryPrice > 0;
+   command.offsetPoints = JsonHasUsableNumber(commandJson, "offsetPoints") ? JsonGetDoubleValue(commandJson, "offsetPoints") : 0;
+
+   if(command.requestId == "")
+   {
+      Print(commandType, " command ignored: missing requestId.");
+      return;
+   }
+
+   if(IsProcessedTradeManagementRequest(command.requestId))
+   {
+      Print("Duplicate ", commandType, " command ignored. requestId: ", command.requestId);
+      return;
+   }
+
+   RememberProcessedTradeManagementRequest(command.requestId);
+
+   string result = ExecuteTradeManagementCommand(command);
+   if(!PostTradeManagementResult(result))
+      Print("Failed to post trade-management result for request ", command.requestId);
+}
+
+void PostDisabledTradeManagementResult(const string commandJson, const string commandType)
+{
+   string requestId = JsonGetStringValue(commandJson, "requestId");
+   string symbol = JsonGetStringValue(commandJson, "symbol");
+   ulong ticket = JsonGetTicketValue(commandJson, "ticket");
+
+   if(requestId == "")
+   {
+      Print(commandType, " command ignored: missing requestId.");
+      return;
+   }
+
+   string result = BuildTradeManagementResultJson(requestId,
+                                                  commandType,
+                                                  false,
+                                                  ticket,
+                                                  symbol,
+                                                  0,
+                                                  "Trade management disabled in EA inputs.");
+   PostTradeManagementResult(result);
+}
+
+string ExecuteTradeManagementCommand(TradeManagementCommand &command)
+{
+   string error = ValidateTradeManagementCommandBase(command);
+   if(error != "")
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, error);
+
+   if(command.commandType == "CLOSE_POSITION")
+      return ExecuteClosePositionCommand(command);
+
+   if(command.commandType == "MODIFY_POSITION")
+      return ExecuteModifyPositionCommand(command);
+
+   if(command.commandType == "MOVE_TO_BREAKEVEN")
+      return ExecuteMoveToBreakevenCommand(command);
+
+   if(command.commandType == "CANCEL_ORDER")
+      return ExecuteCancelOrderCommand(command);
+
+   if(command.commandType == "MODIFY_ORDER")
+      return ExecuteModifyOrderCommand(command);
+
+   return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Unsupported trade-management command type.");
+}
+
+string ValidateTradeManagementCommandBase(TradeManagementCommand &command)
+{
+   if(command.requestId == "")
+      return "requestId is required";
+   if(command.ticket == 0)
+      return "ticket is required";
+   if(command.symbol == "")
+      return "symbol is required";
+   if(!SymbolSelect(command.symbol, true))
+      return "Symbol is not available";
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+      return "MT5 Algo Trading is disabled.";
+   if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+      return "Live trading is not allowed for this EA.";
+   if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+      return "Trading is disabled for this account.";
+   if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+      return "Expert trading is disabled for this account.";
+
+   return "";
+}
+
+string ExecuteClosePositionCommand(TradeManagementCommand &command)
+{
+   if(!PositionSelectByTicket(command.ticket))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position ticket was not found.");
+
+   string positionSymbol = PositionGetString(POSITION_SYMBOL);
+   if(positionSymbol != command.symbol)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position symbol does not match command symbol.");
+
+   MqlTick tick;
+   ZeroMemory(tick);
+   if(!SymbolInfoTick(command.symbol, tick))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Symbol tick is not available.");
+
+   double currentVolume = PositionGetDouble(POSITION_VOLUME);
+   long positionType = PositionGetInteger(POSITION_TYPE);
+   double volumeMin = SymbolInfoDouble(command.symbol, SYMBOL_VOLUME_MIN);
+   double volumeStep = SymbolInfoDouble(command.symbol, SYMBOL_VOLUME_STEP);
+
+   if(currentVolume <= 0 || !MathIsValidNumber(currentVolume))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position volume is invalid.");
+
+   if(volumeStep <= 0 || !MathIsValidNumber(volumeStep))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Volume step must be greater than 0.");
+
+   bool partialClose = command.volumeProvided;
+   double closeVolume = partialClose ? command.volume : currentVolume;
+
+   if(closeVolume <= 0 || !MathIsValidNumber(closeVolume))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Close volume must be greater than 0.");
+
+   if(closeVolume > currentVolume + 0.00000001)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Close volume exceeds current position volume.");
+
+   if(partialClose && closeVolume >= currentVolume - 0.00000001)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Partial close volume must be less than current position volume.");
+
+   closeVolume = NormalizeOrderVolumeDown(closeVolume, volumeStep);
+   if(volumeMin > 0 && closeVolume < volumeMin)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Close volume is below broker minimum.");
+
+   if(partialClose)
+   {
+      double remainingVolume = NormalizeDouble(currentVolume - closeVolume, VolumeDigitsFromStep(volumeStep));
+      if(volumeMin > 0 && remainingVolume > 0 && remainingVolume < volumeMin)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Remaining position volume would be below broker minimum.");
+   }
+
+   MqlTradeRequest request;
+   ZeroMemory(request);
+
+   request.action = TRADE_ACTION_DEAL;
+   request.position = command.ticket;
+   request.symbol = command.symbol;
+   request.volume = closeVolume;
+   request.deviation = MaxDeviationPoints;
+   request.type_filling = GetOrderFillingMode(command.symbol);
+
+   if(positionType == POSITION_TYPE_BUY)
+   {
+      request.type = ORDER_TYPE_SELL;
+      request.price = NormalizeDouble(tick.bid, (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS));
+   }
+   else if(positionType == POSITION_TYPE_SELL)
+   {
+      request.type = ORDER_TYPE_BUY;
+      request.price = NormalizeDouble(tick.ask, (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS));
+   }
+   else
+   {
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Unsupported position type.");
+   }
+
+   return SendTradeManagementRequest(command, request, partialClose ? "Position partially closed" : "Position closed");
+}
+
+string ExecuteModifyPositionCommand(TradeManagementCommand &command)
+{
+   if(!PositionSelectByTicket(command.ticket))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position ticket was not found.");
+
+   string positionSymbol = PositionGetString(POSITION_SYMBOL);
+   if(positionSymbol != command.symbol)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position symbol does not match command symbol.");
+
+   if(!command.slProvided && !command.tpProvided)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "At least one of SL or TP must be provided.");
+
+   int digits = (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS);
+   double sl = command.slProvided ? NormalizeDouble(command.sl, digits) : PositionGetDouble(POSITION_SL);
+   double tp = command.tpProvided ? NormalizeDouble(command.tp, digits) : PositionGetDouble(POSITION_TP);
+   bool effectiveSlProvided = sl > 0 && MathIsValidNumber(sl);
+   bool effectiveTpProvided = tp > 0 && MathIsValidNumber(tp);
+
+   string error = ValidatePositionStopLevels(command.symbol, PositionGetInteger(POSITION_TYPE), sl, effectiveSlProvided, tp, effectiveTpProvided);
+   if(error != "")
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, error);
+
+   MqlTradeRequest request;
+   ZeroMemory(request);
+
+   request.action = TRADE_ACTION_SLTP;
+   request.position = command.ticket;
+   request.symbol = command.symbol;
+   request.sl = sl;
+   request.tp = tp;
+
+   return SendTradeManagementRequest(command, request, "Position SL/TP modified");
+}
+
+string ExecuteMoveToBreakevenCommand(TradeManagementCommand &command)
+{
+   if(!PositionSelectByTicket(command.ticket))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position ticket was not found.");
+
+   string positionSymbol = PositionGetString(POSITION_SYMBOL);
+   if(positionSymbol != command.symbol)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Position symbol does not match command symbol.");
+
+   if(command.offsetPoints < 0 || !MathIsValidNumber(command.offsetPoints))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "offsetPoints must be greater than or equal to 0.");
+
+   double point = SymbolInfoDouble(command.symbol, SYMBOL_POINT);
+   if(point <= 0 || !MathIsValidNumber(point))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Symbol point must be greater than 0.");
+
+   long positionType = PositionGetInteger(POSITION_TYPE);
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   int digits = (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS);
+   double newSl = positionType == POSITION_TYPE_SELL
+      ? openPrice - command.offsetPoints * point
+      : openPrice + command.offsetPoints * point;
+   newSl = NormalizeDouble(newSl, digits);
+
+   string error = ValidatePositionStopLevels(command.symbol, positionType, newSl, true, PositionGetDouble(POSITION_TP), false);
+   if(error != "")
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, error);
+
+   MqlTradeRequest request;
+   ZeroMemory(request);
+
+   request.action = TRADE_ACTION_SLTP;
+   request.position = command.ticket;
+   request.symbol = command.symbol;
+   request.sl = newSl;
+   request.tp = PositionGetDouble(POSITION_TP);
+
+   return SendTradeManagementRequest(command, request, "Position moved to breakeven");
+}
+
+string ExecuteCancelOrderCommand(TradeManagementCommand &command)
+{
+   if(!OrderSelect(command.ticket))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Pending order ticket was not found.");
+
+   string orderSymbol = OrderGetString(ORDER_SYMBOL);
+   if(orderSymbol != command.symbol)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Pending order symbol does not match command symbol.");
+
+   long orderType = OrderGetInteger(ORDER_TYPE);
+   if(!IsPendingOrderType(orderType))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Ticket is not an active pending order.");
+
+   MqlTradeRequest request;
+   ZeroMemory(request);
+
+   request.action = TRADE_ACTION_REMOVE;
+   request.order = command.ticket;
+   request.symbol = command.symbol;
+
+   return SendTradeManagementRequest(command, request, "Pending order canceled");
+}
+
+string ExecuteModifyOrderCommand(TradeManagementCommand &command)
+{
+   if(!OrderSelect(command.ticket))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Pending order ticket was not found.");
+
+   string orderSymbol = OrderGetString(ORDER_SYMBOL);
+   if(orderSymbol != command.symbol)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Pending order symbol does not match command symbol.");
+
+   long orderType = OrderGetInteger(ORDER_TYPE);
+   if(orderType != ORDER_TYPE_BUY_LIMIT && orderType != ORDER_TYPE_SELL_LIMIT)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Only BUY_LIMIT and SELL_LIMIT pending orders are supported.");
+
+   if(!command.entryPriceProvided)
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "entryPrice is required.");
+
+   MqlTick tick;
+   ZeroMemory(tick);
+   if(!SymbolInfoTick(command.symbol, tick))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Symbol tick is not available.");
+
+   int digits = (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS);
+   double entryPrice = NormalizeDouble(command.entryPrice, digits);
+   double sl = command.slProvided ? NormalizeDouble(command.sl, digits) : OrderGetDouble(ORDER_SL);
+   double tp = command.tpProvided ? NormalizeDouble(command.tp, digits) : OrderGetDouble(ORDER_TP);
+   bool effectiveSlProvided = sl > 0 && MathIsValidNumber(sl);
+   bool effectiveTpProvided = tp > 0 && MathIsValidNumber(tp);
+
+   if(entryPrice <= 0 || !MathIsValidNumber(entryPrice))
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Entry price must be greater than 0.");
+
+   if(orderType == ORDER_TYPE_BUY_LIMIT)
+   {
+      if(entryPrice >= tick.ask)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Buy Limit entry must be below current ask.");
+      if(effectiveSlProvided && sl >= entryPrice)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Stop loss must be below entry for BUY_LIMIT.");
+      if(effectiveTpProvided && tp <= entryPrice)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Take profit must be above entry for BUY_LIMIT.");
+   }
+   else
+   {
+      if(entryPrice <= tick.bid)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Sell Limit entry must be above current bid.");
+      if(effectiveSlProvided && sl <= entryPrice)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Stop loss must be above entry for SELL_LIMIT.");
+      if(effectiveTpProvided && tp >= entryPrice)
+         return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, "Take profit must be below entry for SELL_LIMIT.");
+   }
+
+   string distanceError = ValidatePendingModificationDistances(command.symbol, orderType, entryPrice, sl, effectiveSlProvided, tp, effectiveTpProvided, tick);
+   if(distanceError != "")
+      return BuildTradeManagementResultJson(command.requestId, command.commandType, false, command.ticket, command.symbol, 0, distanceError);
+
+   MqlTradeRequest request;
+   ZeroMemory(request);
+
+   request.action = TRADE_ACTION_MODIFY;
+   request.order = command.ticket;
+   request.symbol = command.symbol;
+   request.price = entryPrice;
+   request.sl = sl;
+   request.tp = tp;
+   request.type_time = (ENUM_ORDER_TYPE_TIME)OrderGetInteger(ORDER_TYPE_TIME);
+   request.expiration = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
+
+   return SendTradeManagementRequest(command, request, "Pending order modified");
+}
+
+string ExecutePlaceOrder(PlaceOrderCommand &command)
+{
+   string error = "";
+   MqlTick tick;
+   ZeroMemory(tick);
+
+   if(command.symbol == "")
+      error = "Symbol is required";
+   else if(!SymbolSelect(command.symbol, true))
+      error = "Symbol is not available";
+   else if(!SymbolInfoTick(command.symbol, tick))
+      error = "Symbol tick is not available";
+   else if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+      error = "MT5 Algo Trading is disabled.";
+   else if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+      error = "Live trading is not allowed for this EA.";
+   else if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+      error = "Trading is disabled for this account.";
+   else if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+      error = "Expert trading is disabled for this account.";
+   else if(command.orderKind != "MARKET" && command.orderKind != "LIMIT")
+      error = "Order kind must be MARKET or LIMIT";
+   else if(command.side != "BUY" && command.side != "SELL")
+      error = "Side must be BUY or SELL";
+   else if(command.volume <= 0 || !MathIsValidNumber(command.volume))
+      error = "Volume must be greater than 0";
+   else if(command.volume > MaxAllowedVolume)
+      error = "Volume exceeds MaxAllowedVolume EA input";
+   else if(command.orderKind == "LIMIT" && (command.entryPrice <= 0 || !MathIsValidNumber(command.entryPrice)))
+      error = "Limit entry price must be greater than 0";
+   else if(RequireStopLossForOrders && !command.slProvided)
+      error = "Stop loss is required by EA inputs";
+
+   int digits = 0;
+   double point = 0;
+   double volumeMin = 0;
+   double volumeMax = 0;
+   double volumeStep = 0;
+   long stopsLevel = 0;
+   long freezeLevel = 0;
+
+   if(error == "")
+   {
+      digits = (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS);
+      point = SymbolInfoDouble(command.symbol, SYMBOL_POINT);
+      volumeMin = SymbolInfoDouble(command.symbol, SYMBOL_VOLUME_MIN);
+      volumeMax = SymbolInfoDouble(command.symbol, SYMBOL_VOLUME_MAX);
+      volumeStep = SymbolInfoDouble(command.symbol, SYMBOL_VOLUME_STEP);
+      stopsLevel = SymbolInfoInteger(command.symbol, SYMBOL_TRADE_STOPS_LEVEL);
+      freezeLevel = SymbolInfoInteger(command.symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+
+      if(point <= 0 || !MathIsValidNumber(point))
+         error = "Symbol point must be greater than 0";
+      else if(volumeStep <= 0 || !MathIsValidNumber(volumeStep))
+         error = "Volume step must be greater than 0";
+   }
+
+   double normalizedVolume = 0;
+   double entryPrice = 0;
+   double sl = 0;
+   double tp = 0;
+   ENUM_ORDER_TYPE tradeType = ORDER_TYPE_BUY;
+   ENUM_TRADE_REQUEST_ACTIONS action = TRADE_ACTION_DEAL;
+
+   if(error == "")
+   {
+      normalizedVolume = NormalizeOrderVolumeDown(command.volume, volumeStep);
+
+      if(volumeMin > 0 && normalizedVolume < volumeMin)
+         error = "Volume is below broker minimum after normalization";
+      else if(volumeMax > 0 && normalizedVolume > volumeMax)
+         error = "Volume exceeds broker maximum";
+   }
+
+   if(error == "")
+   {
+      if(command.orderKind == "MARKET")
+      {
+         action = TRADE_ACTION_DEAL;
+         if(command.side == "BUY")
+         {
+            tradeType = ORDER_TYPE_BUY;
+            entryPrice = tick.ask;
+         }
+         else
+         {
+            tradeType = ORDER_TYPE_SELL;
+            entryPrice = tick.bid;
+         }
+      }
+      else
+      {
+         action = TRADE_ACTION_PENDING;
+         if(command.side == "BUY")
+            tradeType = ORDER_TYPE_BUY_LIMIT;
+         else
+            tradeType = ORDER_TYPE_SELL_LIMIT;
+
+         entryPrice = command.entryPrice;
+      }
+
+      entryPrice = NormalizeDouble(entryPrice, digits);
+      sl = command.slProvided ? NormalizeDouble(command.sl, digits) : 0;
+      tp = command.tpProvided ? NormalizeDouble(command.tp, digits) : 0;
+
+      if(entryPrice <= 0 || !MathIsValidNumber(entryPrice))
+         error = "Entry price must be greater than 0";
+   }
+
+   if(error == "")
+   {
+      if(command.orderKind == "LIMIT" && command.side == "BUY" && entryPrice >= tick.ask)
+         error = "Buy Limit entry must be below current ask";
+      else if(command.orderKind == "LIMIT" && command.side == "SELL" && entryPrice <= tick.bid)
+         error = "Sell Limit entry must be above current bid";
+      else if(command.side == "BUY" && command.slProvided && sl >= entryPrice)
+         error = "Stop loss must be below entry for BUY";
+      else if(command.side == "SELL" && command.slProvided && sl <= entryPrice)
+         error = "Stop loss must be above entry for SELL";
+      else if(command.side == "BUY" && command.tpProvided && tp <= entryPrice)
+         error = "Take profit must be above entry for BUY";
+      else if(command.side == "SELL" && command.tpProvided && tp >= entryPrice)
+         error = "Take profit must be below entry for SELL";
+   }
+
+   if(error == "")
+      error = ValidateOrderDistances(command, entryPrice, sl, tp, tick, point, stopsLevel, freezeLevel);
+
+   if(error == "")
+   {
+      double requiredMargin = 0;
+      if(OrderCalcMargin(tradeType, command.symbol, normalizedVolume, entryPrice, requiredMargin))
+      {
+         double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+         if(requiredMargin > freeMargin)
+            error = "Not enough free margin for order";
+      }
+      else
+      {
+         Print("OrderCalcMargin failed for ", command.symbol, ". Error: ", GetLastError());
+      }
+   }
+
+   if(error != "")
+      return BuildOrderResultJson(command, false, 0, 0, entryPrice, sl, tp, 0, error);
+
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action = action;
+   request.symbol = command.symbol;
+   request.volume = normalizedVolume;
+   request.type = tradeType;
+   request.price = entryPrice;
+   request.sl = command.slProvided ? sl : 0;
+   request.tp = command.tpProvided ? tp : 0;
+   request.deviation = MaxDeviationPoints;
+   request.magic = (ulong)(command.magic > 0 ? command.magic : DefaultMagicNumber);
+   request.comment = command.comment;
+
+   if(action == TRADE_ACTION_PENDING)
+   {
+      request.type_time = ORDER_TIME_GTC;
+      request.expiration = 0;
+      request.type_filling = ORDER_FILLING_RETURN;
+   }
+   else
+   {
+      request.type_filling = GetOrderFillingMode(command.symbol);
+   }
+
+   ResetLastError();
+   bool sent = OrderSend(request, result);
+   int lastError = GetLastError();
+   bool ok = sent && IsSuccessfulTradeRetcode(result.retcode);
+   ulong ticket = result.order > 0 ? result.order : result.deal;
+   string message = result.comment;
+
+   if(message == "")
+      message = ok ? "Order placed" : "OrderSend failed";
+
+   if(!sent || !ok)
+      message = message + " | GetLastError=" + IntegerToString(lastError) + " | retcode=" + IntegerToString((long)result.retcode);
+
+   Print("PLACE_ORDER result requestId=", command.requestId,
+         " ok=", ok,
+         " retcode=", result.retcode,
+         " ticket=", ticket,
+         " message=", message);
+
+   return BuildOrderResultJson(command,
+                               ok,
+                               ticket,
+                               result.retcode,
+                               entryPrice,
+                               request.sl,
+                               request.tp,
+                               normalizedVolume,
+                               message);
+}
+
+string ValidateOrderDistances(PlaceOrderCommand &command,
+                              const double entryPrice,
+                              const double sl,
+                              const double tp,
+                              const MqlTick &tick,
+                              const double point,
+                              const long stopsLevel,
+                              const long freezeLevel)
+{
+   double minStopDistance = stopsLevel > 0 ? stopsLevel * point : 0;
+   double minFreezeDistance = freezeLevel > 0 ? freezeLevel * point : 0;
+
+   if(minStopDistance > 0)
+   {
+      if(command.orderKind == "LIMIT")
+      {
+         if(command.side == "BUY" && (tick.ask - entryPrice) < minStopDistance)
+            return "Buy Limit entry is inside broker stops level";
+
+         if(command.side == "SELL" && (entryPrice - tick.bid) < minStopDistance)
+            return "Sell Limit entry is inside broker stops level";
+      }
+
+      if(command.slProvided && MathAbs(entryPrice - sl) < minStopDistance)
+         return "Stop loss is inside broker stops level";
+
+      if(command.tpProvided && MathAbs(entryPrice - tp) < minStopDistance)
+         return "Take profit is inside broker stops level";
+   }
+
+   if(minFreezeDistance > 0 && command.orderKind == "LIMIT")
+   {
+      if(command.side == "BUY" && (tick.ask - entryPrice) < minFreezeDistance)
+         return "Buy Limit entry is inside broker freeze level";
+
+      if(command.side == "SELL" && (entryPrice - tick.bid) < minFreezeDistance)
+         return "Sell Limit entry is inside broker freeze level";
+   }
+
+   return "";
+}
+
+double NormalizeOrderVolumeDown(const double volume, const double volumeStep)
+{
+   if(volume <= 0 || volumeStep <= 0)
+      return 0;
+
+   double normalized = MathFloor((volume / volumeStep) + 0.000000001) * volumeStep;
+   return NormalizeDouble(normalized, VolumeDigitsFromStep(volumeStep));
+}
+
+ENUM_ORDER_TYPE_FILLING GetOrderFillingMode(const string symbol)
+{
+   long filling = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+
+   if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK)
+      return ORDER_FILLING_FOK;
+
+   if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC)
+      return ORDER_FILLING_IOC;
+
+   return ORDER_FILLING_RETURN;
+}
+
+bool IsSuccessfulTradeRetcode(const uint retcode)
+{
+   return retcode == TRADE_RETCODE_DONE ||
+          retcode == TRADE_RETCODE_PLACED ||
+          retcode == TRADE_RETCODE_DONE_PARTIAL;
+}
+
+string BuildOrderResultJson(PlaceOrderCommand &command,
+                            const bool ok,
+                            const ulong ticket,
+                            const uint retcode,
+                            const double entryPrice,
+                            const double sl,
+                            const double tp,
+                            const double volume,
+                            const string message)
+{
+   int digits = 5;
+   if(command.symbol != "" && SymbolSelect(command.symbol, true))
+      digits = (int)SymbolInfoInteger(command.symbol, SYMBOL_DIGITS);
+
+   double resultVolume = volume > 0 ? volume : command.volume;
+
+   string json = "{";
+   json += "\"type\":\"ORDER_RESULT\",";
+   json += "\"requestId\":" + JsonString(command.requestId) + ",";
+   json += "\"ok\":" + JsonBool(ok) + ",";
+   json += "\"symbol\":" + JsonString(command.symbol) + ",";
+   json += "\"orderKind\":" + JsonString(command.orderKind) + ",";
+   json += "\"side\":" + JsonString(command.side) + ",";
+   json += "\"volume\":" + JsonNumber(resultVolume, 8) + ",";
+   json += "\"entryPrice\":" + JsonNumber(entryPrice > 0 ? entryPrice : command.entryPrice, digits) + ",";
+   json += "\"sl\":" + JsonNullableOrderPrice(sl, command.slProvided, digits) + ",";
+   json += "\"tp\":" + JsonNullableOrderPrice(tp, command.tpProvided, digits) + ",";
+   if(ok)
+      json += "\"ticket\":" + IntegerToString((long)ticket) + ",";
+   json += "\"retcode\":" + IntegerToString((long)retcode) + ",";
+   json += "\"message\":" + JsonString(message);
+   json += "}";
+   return json;
+}
+
+string JsonNullableOrderPrice(const double value, const bool provided, const int digits)
+{
+   if(!provided || value <= 0 || !MathIsValidNumber(value))
+      return "null";
+
+   return JsonNumber(value, digits);
+}
+
+bool PostOrderResult(const string payload)
+{
+   char body[];
+   int bodyLength = StringToCharArray(payload, body, 0, WHOLE_ARRAY, CP_UTF8);
+   if(bodyLength > 0)
+      ArrayResize(body, bodyLength - 1);
+
+   char response[];
+   string responseHeaders = "";
+   string headers = "Content-Type: application/json\r\n";
+   string url = ServerBaseUrl() + "/mt5/order-result";
+
+   ResetLastError();
+   int status = WebRequest("POST", url, headers, 5000, body, response, responseHeaders);
+   if(status == -1)
+   {
+      Print("Order result WebRequest failed. Error: ", GetLastError());
+      return false;
+   }
+
+   if(status < 200 || status >= 300)
+   {
+      Print("Order result post returned HTTP ", status, ". Response: ", CharArrayToString(response, 0, -1, CP_UTF8));
+      return false;
+   }
+
+   return true;
+}
+
+string SendTradeManagementRequest(TradeManagementCommand &command,
+                                  MqlTradeRequest &request,
+                                  const string successMessage)
+{
+   MqlTradeResult result;
+   ZeroMemory(result);
+
+   ResetLastError();
+   bool sent = OrderSend(request, result);
+   int lastError = GetLastError();
+   bool ok = sent && IsSuccessfulTradeRetcode(result.retcode);
+   string message = result.comment;
+
+   if(message == "")
+      message = ok ? successMessage : "Trade-management OrderSend failed";
+
+   if(!sent || !ok)
+      message = message + " | GetLastError=" + IntegerToString(lastError) + " | retcode=" + IntegerToString((long)result.retcode);
+
+   Print(command.commandType, " result requestId=", command.requestId,
+         " ok=", ok,
+         " retcode=", result.retcode,
+         " ticket=", command.ticket,
+         " message=", message);
+
+   return BuildTradeManagementResultJson(command.requestId,
+                                         command.commandType,
+                                         ok,
+                                         command.ticket,
+                                         command.symbol,
+                                         result.retcode,
+                                         message);
+}
+
+string ValidatePositionStopLevels(const string symbol,
+                                  const long positionType,
+                                  const double sl,
+                                  const bool slProvided,
+                                  const double tp,
+                                  const bool tpProvided)
+{
+   MqlTick tick;
+   ZeroMemory(tick);
+   if(!SymbolInfoTick(symbol, tick))
+      return "Symbol tick is not available.";
+
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   long stopsLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minStopDistance = stopsLevel > 0 && point > 0 ? stopsLevel * point : 0;
+   double minFreezeDistance = freezeLevel > 0 && point > 0 ? freezeLevel * point : 0;
+
+   double reference = positionType == POSITION_TYPE_BUY ? tick.bid : tick.ask;
+   if(reference <= 0 || !MathIsValidNumber(reference))
+      return "Current price is invalid.";
+
+   if(positionType == POSITION_TYPE_BUY)
+   {
+      if(slProvided && sl >= reference)
+         return "Stop loss must be below current bid for BUY position.";
+      if(tpProvided && tp <= reference)
+         return "Take profit must be above current bid for BUY position.";
+   }
+   else if(positionType == POSITION_TYPE_SELL)
+   {
+      if(slProvided && sl <= reference)
+         return "Stop loss must be above current ask for SELL position.";
+      if(tpProvided && tp >= reference)
+         return "Take profit must be below current ask for SELL position.";
+   }
+   else
+   {
+      return "Unsupported position type.";
+   }
+
+   if(minStopDistance > 0)
+   {
+      if(slProvided && MathAbs(reference - sl) < minStopDistance)
+         return "Stop loss is inside broker stops level.";
+      if(tpProvided && MathAbs(reference - tp) < minStopDistance)
+         return "Take profit is inside broker stops level.";
+   }
+
+   if(minFreezeDistance > 0)
+   {
+      if(slProvided && MathAbs(reference - sl) < minFreezeDistance)
+         return "Stop loss is inside broker freeze level.";
+      if(tpProvided && MathAbs(reference - tp) < minFreezeDistance)
+         return "Take profit is inside broker freeze level.";
+   }
+
+   return "";
+}
+
+string ValidatePendingModificationDistances(const string symbol,
+                                            const long orderType,
+                                            const double entryPrice,
+                                            const double sl,
+                                            const bool slProvided,
+                                            const double tp,
+                                            const bool tpProvided,
+                                            const MqlTick &tick)
+{
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   long stopsLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minStopDistance = stopsLevel > 0 && point > 0 ? stopsLevel * point : 0;
+   double minFreezeDistance = freezeLevel > 0 && point > 0 ? freezeLevel * point : 0;
+
+   if(minStopDistance > 0)
+   {
+      if(orderType == ORDER_TYPE_BUY_LIMIT && (tick.ask - entryPrice) < minStopDistance)
+         return "Buy Limit entry is inside broker stops level.";
+      if(orderType == ORDER_TYPE_SELL_LIMIT && (entryPrice - tick.bid) < minStopDistance)
+         return "Sell Limit entry is inside broker stops level.";
+      if(slProvided && MathAbs(entryPrice - sl) < minStopDistance)
+         return "Stop loss is inside broker stops level.";
+      if(tpProvided && MathAbs(entryPrice - tp) < minStopDistance)
+         return "Take profit is inside broker stops level.";
+   }
+
+   if(minFreezeDistance > 0)
+   {
+      if(orderType == ORDER_TYPE_BUY_LIMIT && (tick.ask - entryPrice) < minFreezeDistance)
+         return "Buy Limit entry is inside broker freeze level.";
+      if(orderType == ORDER_TYPE_SELL_LIMIT && (entryPrice - tick.bid) < minFreezeDistance)
+         return "Sell Limit entry is inside broker freeze level.";
+   }
+
+   return "";
+}
+
+string BuildTradeManagementResultJson(const string requestId,
+                                      const string commandType,
+                                      const bool ok,
+                                      const ulong ticket,
+                                      const string symbol,
+                                      const uint retcode,
+                                      const string message)
+{
+   string json = "{";
+   json += "\"type\":\"TRADE_MANAGEMENT_RESULT\",";
+   json += "\"requestId\":" + JsonString(requestId) + ",";
+   json += "\"commandType\":" + JsonString(commandType) + ",";
+   json += "\"ok\":" + JsonBool(ok) + ",";
+   json += "\"ticket\":" + JsonString(IntegerToString((long)ticket)) + ",";
+   json += "\"symbol\":" + JsonString(symbol) + ",";
+   json += "\"retcode\":" + IntegerToString((long)retcode) + ",";
+   json += "\"message\":" + JsonString(message);
+   json += "}";
+   return json;
+}
+
+bool PostTradeManagementResult(const string payload)
+{
+   char body[];
+   int bodyLength = StringToCharArray(payload, body, 0, WHOLE_ARRAY, CP_UTF8);
+   if(bodyLength > 0)
+      ArrayResize(body, bodyLength - 1);
+
+   char response[];
+   string responseHeaders = "";
+   string headers = "Content-Type: application/json\r\n";
+   string url = ServerBaseUrl() + "/mt5/trade-management-result";
+
+   ResetLastError();
+   int status = WebRequest("POST", url, headers, 5000, body, response, responseHeaders);
+   if(status == -1)
+   {
+      Print("Trade-management result WebRequest failed. Error: ", GetLastError());
+      return false;
+   }
+
+   if(status < 200 || status >= 300)
+   {
+      Print("Trade-management result post returned HTTP ", status, ". Response: ", CharArrayToString(response, 0, -1, CP_UTF8));
+      return false;
+   }
+
+   return true;
+}
+
+bool IsProcessedOrderRequest(const string requestId)
+{
+   for(int i = 0; i < ArraySize(processedOrderRequestIds); i++)
+   {
+      if(processedOrderRequestIds[i] == requestId)
+         return true;
+   }
+
+   return false;
+}
+
+void RememberProcessedOrderRequest(const string requestId)
+{
+   int size = ArraySize(processedOrderRequestIds);
+   if(size >= MAX_PROCESSED_ORDER_IDS)
+   {
+      for(int i = 1; i < size; i++)
+         processedOrderRequestIds[i - 1] = processedOrderRequestIds[i];
+      size = MAX_PROCESSED_ORDER_IDS - 1;
+      ArrayResize(processedOrderRequestIds, size);
+   }
+
+   ArrayResize(processedOrderRequestIds, size + 1);
+   processedOrderRequestIds[size] = requestId;
+}
+
+bool IsProcessedTradeManagementRequest(const string requestId)
+{
+   for(int i = 0; i < ArraySize(processedTradeManagementRequestIds); i++)
+   {
+      if(processedTradeManagementRequestIds[i] == requestId)
+         return true;
+   }
+
+   return false;
+}
+
+void RememberProcessedTradeManagementRequest(const string requestId)
+{
+   int size = ArraySize(processedTradeManagementRequestIds);
+   if(size >= MAX_PROCESSED_TRADE_MANAGEMENT_IDS)
+   {
+      for(int i = 1; i < size; i++)
+         processedTradeManagementRequestIds[i - 1] = processedTradeManagementRequestIds[i];
+      size = MAX_PROCESSED_TRADE_MANAGEMENT_IDS - 1;
+      ArrayResize(processedTradeManagementRequestIds, size);
+   }
+
+   ArrayResize(processedTradeManagementRequestIds, size + 1);
+   processedTradeManagementRequestIds[size] = requestId;
 }
 
 string BuildRiskLotResult(const string requestId,
@@ -981,6 +2125,35 @@ double JsonGetDoubleValue(const string json, const string key)
    }
 
    return StringToDouble(StringSubstr(json, start, end - start));
+}
+
+ulong JsonGetTicketValue(const string json, const string key)
+{
+   string textValue = JsonGetStringValue(json, key);
+   if(textValue != "")
+      return (ulong)StringToInteger(textValue);
+
+   double numericValue = JsonGetDoubleValue(json, key);
+   if(numericValue <= 0 || !MathIsValidNumber(numericValue))
+      return 0;
+
+   return (ulong)numericValue;
+}
+
+bool JsonHasUsableNumber(const string json, const string key)
+{
+   int colon = JsonFindValueStart(json, key);
+   if(colon < 0)
+      return false;
+
+   int start = SkipWhitespace(json, colon);
+   if(start >= StringLen(json))
+      return false;
+
+   if(StringSubstr(json, start, 4) == "null")
+      return false;
+
+   return true;
 }
 
 int JsonFindValueStart(const string json, const string key)
