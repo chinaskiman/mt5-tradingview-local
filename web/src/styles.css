@@ -299,6 +299,25 @@ body.is-resizing-side-panel .side-panel-width-handle::after {
   color: #e5e7eb;
 }
 
+.visual-filter-control {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.visual-filter-control > span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.visual-filter-control .preset-control {
+  justify-content: stretch;
+}
+
+.visual-filter-control .preset-button {
+  flex: 1;
+}
+
 .dashboard {
   display: grid;
   grid-template-rows: minmax(360px, 1fr) 170px 190px;

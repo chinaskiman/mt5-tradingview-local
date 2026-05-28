@@ -10,7 +10,12 @@ export const INDICATOR_COLORS = {
   resistance: '#f87171',
   support: '#4ade80',
   resistanceBuffer: 'rgba(248, 113, 113, 0.58)',
-  supportBuffer: 'rgba(74, 222, 128, 0.58)'
+  supportBuffer: 'rgba(74, 222, 128, 0.58)',
+  positionBuy: '#22c55e',
+  positionSell: '#ef4444',
+  pendingOrder: '#f59e0b',
+  tradeStopLoss: '#fb7185',
+  tradeTakeProfit: '#34d399'
 };
 
 export const CHART_COLORS = {

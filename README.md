@@ -342,6 +342,57 @@ Position filter behavior:
 - Empty states distinguish between no current-symbol positions and no open positions.
 - The selected filter is restored after browser refresh.
 
+## V3E Chart Trade Visuals
+
+V3E renders frontend-only trade reference lines on the price chart from the same read-only MT5 snapshot used by Trading Monitor.
+
+- Open positions:
+  - Entry line.
+  - SL line when `sl` is present and greater than zero.
+  - TP line when `tp` is present and greater than zero.
+  - Entry label is compact: `BUY 0.10 #123456 +$24.50`.
+- Pending orders:
+  - Entry line.
+  - SL line when present.
+  - TP line when present.
+  - Entry label is compact: `BUY LIMIT 0.10 #123456`.
+- SL and TP labels are compact: `SL #ticket` and `TP #ticket`.
+- Trade line prices use the latest `quote.digits` from MT5.
+- PnL uses `account.currency`, with positive and negative PnL visually distinguished on the price axis label.
+- BUY and SELL position entry lines use different colors.
+- Pending order entry lines use a separate dashed style.
+- SL and TP lines use their own colors/styles.
+- The `Indicators` side-menu section includes `Chart Trade Visuals` controls for position lines, pending order lines, SL lines, TP lines, PnL labels, and symbol filtering.
+- The filter defaults to `Current symbol only`, can be changed to `All symbols`, saves in `localStorage`, and only changes the browser overlay.
+- Trading Monitor row action menus include `Focus on chart`. It is frontend-only and briefly highlights the matching position or pending-order entry line. If the focused trade is on another symbol, the chart trade-visual filter switches to `All symbols` so the line can be shown.
+
+These lines are display-only. They do not send close, modify, cancel, or drag commands, and they do not change backend or MT5 trading logic. Existing line handles are updated from each latest snapshot, and disappeared positions/orders are removed so stale chart lines do not remain.
+
+### V3E Manual Testing Checklist
+
+Run these checks on a demo account only:
+
+1. Open a demo market BUY with SL/TP.
+2. Confirm entry, SL, and TP lines appear on the price chart.
+3. Confirm the PnL label updates with MT5 snapshots.
+4. Open a demo market SELL with SL/TP.
+5. Confirm SELL line styling is distinct from BUY.
+6. Place a BUY LIMIT with SL/TP.
+7. Confirm pending order entry, SL, and TP lines appear.
+8. Place a SELL LIMIT with SL/TP.
+9. Confirm pending order visuals work.
+10. Toggle position lines off/on in `Indicators` -> `Chart Trade Visuals`.
+11. Toggle pending order lines off/on.
+12. Toggle SL and TP lines off/on.
+13. Toggle PnL labels off/on.
+14. Test `Current symbol only` vs `All symbols` filter.
+15. Close a position and confirm its lines disappear after the next MT5 snapshot.
+16. Cancel a pending order and confirm its lines disappear after the next MT5 snapshot.
+17. Modify SL/TP and confirm the lines update after the next MT5 snapshot.
+18. Confirm chart sync, crosshair sync, panel resize, and right panel collapse still work.
+19. Confirm no drag-to-modify exists yet.
+20. Confirm no chart close/modify buttons exist yet.
+
 ## V3A Manual Testing Checklist
 
 1. Start backend.
@@ -357,14 +408,19 @@ Position filter behavior:
 11. Open a position on another symbol manually in MT5.
 12. Confirm `Current symbol only` hides the other symbol.
 13. Confirm `All symbols` shows both positions.
-14. Refresh the browser and confirm the selected filter is restored.
-15. Switch the side menu between `Trading Monitor` and `Indicators`.
-16. Collapse the right side panel and confirm the chart area expands.
-17. Reopen the side panel and confirm the last selected section is restored.
-18. Confirm no Buy/Sell/Close buttons exist.
-19. Confirm `http://127.0.0.1:3001/health` shows `hasAccount`, `hasQuote`, and `positionCount`.
-20. Confirm no frontend indicator calculations were added.
-21. Confirm chart sync, crosshair sync, and draggable panels still work.
+14. Confirm the price chart shows position entry, SL, and TP lines for the current symbol.
+15. In `Indicators` -> `Chart Trade Visuals`, switch the filter from `Current symbol only` to `All symbols` and confirm other-symbol trade lines appear if their prices are in view.
+16. Place or keep a pending order and confirm pending entry, SL, and TP lines appear with pending-order styling.
+17. Close or cancel a test trade in MT5 and confirm stale chart lines disappear after the next snapshot.
+18. Use a row `Actions` menu and click `Focus on chart`; confirm the matching entry line briefly highlights and no trade command is sent.
+19. Refresh the browser and confirm the selected filters are restored.
+20. Switch the side menu between `Trading Monitor` and `Indicators`.
+21. Collapse the right side panel and confirm the chart area expands.
+22. Reopen the side panel and confirm the last selected section is restored.
+23. Confirm no chart drag-to-modify, close, or cancel controls were added.
+24. Confirm `http://127.0.0.1:3001/health` shows `hasAccount`, `hasQuote`, and `positionCount`.
+25. Confirm no frontend indicator calculations were added.
+26. Confirm chart sync, crosshair sync, and draggable panels still work.
 
 ## V3B Risk Calculator
 
@@ -956,6 +1012,7 @@ npm run dev
 - V3C order entry and V3D trade management are controlled by MT5 Algo Trading, EA live-trading permission, account permissions, frontend Trading Mode, and the relevant backend/EA safety gates.
 - V3D supports only individual position/order management actions. No bulk close, bulk cancel, trailing stop, or automated management exists.
 - V3D pending order modification currently supports only supported pending order types, primarily Buy Limit and Sell Limit.
+- V3E chart trade visuals are visual-only. There is no drag-to-modify, chart close button, chart modify button, or chart cancel button yet.
 - Browser indicator toggles only hide/show local layers; they do not change MT5 calculations.
 - S/R + ATR Buffer settings are controlled from the MT5 EA inputs; the frontend only displays or locally hides/shows the MT5-sent lines.
 - Collapsed oscillator panels show the latest received values only; they do not calculate summaries in the browser.

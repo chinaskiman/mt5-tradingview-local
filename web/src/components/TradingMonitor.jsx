@@ -7,7 +7,7 @@ const FILTERS = {
 
 const TRADING_MODE_KEY = 'mt5-dashboard-trading-mode-enabled';
 
-export default function TradingMonitor({ snapshot, filter, onFilterChange, tradeManagement, onSendTradeManagement }) {
+export default function TradingMonitor({ snapshot, filter, onFilterChange, tradeManagement, onSendTradeManagement, onFocusTrade }) {
   const account = snapshot?.account || null;
   const quote = snapshot?.quote || null;
   const positions = Array.isArray(snapshot?.positions) ? snapshot.positions : [];
@@ -52,6 +52,34 @@ export default function TradingMonitor({ snapshot, filter, onFilterChange, trade
       ...current,
       [key]: value
     }));
+  }
+
+  function selectPositionAction(kind, position) {
+    if (kind === 'position-focus') {
+      onFocusTrade?.({
+        kind: 'position',
+        ticket: position.ticket,
+        symbol: position.symbol,
+        price: position.openPrice
+      });
+      return;
+    }
+
+    openAction(kind, position);
+  }
+
+  function selectOrderAction(kind, order) {
+    if (kind === 'order-focus') {
+      onFocusTrade?.({
+        kind: 'order',
+        ticket: order.ticket,
+        symbol: order.symbol,
+        price: order.openPrice
+      });
+      return;
+    }
+
+    openAction(kind, order);
   }
 
   return (
@@ -186,12 +214,13 @@ export default function TradingMonitor({ snapshot, filter, onFilterChange, trade
                     <td>
                       <ActionMenu
                         options={[
+                          { value: 'position-focus', label: 'Focus on chart' },
                           { value: 'position-close', label: 'Close', danger: true },
                           { value: 'position-partial-close', label: 'Partial Close' },
                           { value: 'position-modify', label: 'Modify SL/TP' },
                           { value: 'position-breakeven', label: 'Breakeven' }
                         ]}
-                        onSelect={(kind) => openAction(kind, position)}
+                        onSelect={(kind) => selectPositionAction(kind, position)}
                       />
                     </td>
                   </tr>
@@ -245,10 +274,11 @@ export default function TradingMonitor({ snapshot, filter, onFilterChange, trade
                     <td>
                       <ActionMenu
                         options={[
+                          { value: 'order-focus', label: 'Focus on chart' },
                           { value: 'order-cancel', label: 'Cancel', danger: true },
                           { value: 'order-modify', label: 'Modify Order' }
                         ]}
-                        onSelect={(kind) => openAction(kind, order)}
+                        onSelect={(kind) => selectOrderAction(kind, order)}
                       />
                     </td>
                   </tr>

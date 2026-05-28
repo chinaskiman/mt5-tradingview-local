@@ -1,11 +1,17 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ColorType, CrosshairMode, LineType, createChart } from 'lightweight-charts';
+import { ColorType, CrosshairMode, LineStyle, LineType, createChart } from 'lightweight-charts';
 import { CHART_COLORS, INDICATOR_COLORS } from '../utils/chartColors.js';
 
 const PRICE_FORMAT = {
   type: 'price',
   precision: 5,
   minMove: 0.00001
+};
+
+const PNL_COLORS = {
+  positive: '#22c55e',
+  negative: '#ef4444',
+  flat: '#94a3b8'
 };
 
 const BASE_CHART_OPTIONS = {
@@ -106,7 +112,9 @@ export default function TradingDashboard({
   onAutoScrollChange,
   onLayoutPresetChange,
   onPanelHeightsChange,
-  onTogglePanelCollapsed
+  onTogglePanelCollapsed,
+  chartTradeVisuals,
+  chartFocusRequest
 }) {
   const dashboardRef = useRef(null);
   const priceRef = useRef(null);
@@ -131,6 +139,9 @@ export default function TradingDashboard({
   const lastDatasetMetaRef = useRef(null);
   const dataRef = useRef(null);
   const resizeDragRef = useRef(null);
+  const tradePriceLinesRef = useRef(new Map());
+  const focusedTradeLineKeyRef = useRef(null);
+  const focusTimeoutRef = useRef(null);
   const [fullscreenPanel, setFullscreenPanel] = useState(null);
   const [dashboardHeight, setDashboardHeight] = useState(0);
   const [draftPanelHeights, setDraftPanelHeights] = useState(null);
@@ -251,6 +262,8 @@ export default function TradingDashboard({
 
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+      clearFocusedTradeLine();
+      clearTradePriceLines();
       if (rangeSyncFrameRef.current !== null) {
         window.cancelAnimationFrame(rangeSyncFrameRef.current);
         rangeSyncFrameRef.current = null;
@@ -271,6 +284,23 @@ export default function TradingDashboard({
       setCrosshairTime(null);
     };
   }, []);
+
+  useEffect(() => {
+    const chartsState = chartsRef.current;
+    if (!chartsState) {
+      return;
+    }
+
+    updateTradePriceLines(snapshot, chartTradeVisuals);
+  }, [snapshot, chartTradeVisuals]);
+
+  useEffect(() => {
+    if (!chartFocusRequest) {
+      return;
+    }
+
+    focusTradeEntryLine(chartFocusRequest);
+  }, [chartFocusRequest]);
 
   useEffect(() => () => {
     const listeners = resizeDragRef.current?.listeners;
@@ -313,6 +343,7 @@ export default function TradingDashboard({
     const capturedTimeRange = getCurrentTimeRange('price') || lastTimeRangeRef.current;
 
     const settings = snapshot?.settings || {};
+    applyPriceFormatting(chartsState, snapshot);
     chartsState.series.priceSyncSeries.setData(seriesData.timeScale);
     chartsState.series.atrSyncSeries.setData(seriesData.timeScale);
     chartsState.series.adxSyncSeries.setData(seriesData.timeScale);
@@ -769,6 +800,116 @@ export default function TradingDashboard({
     applyVisibleLogicalRange({ from, to }, null, { rememberTimeRange: true });
   }
 
+  function updateTradePriceLines(nextSnapshot, visualSettings) {
+    const priceSeries = chartsRef.current?.series.priceSeries;
+
+    if (!priceSeries || !nextSnapshot) {
+      clearTradePriceLines();
+      return;
+    }
+
+    const tradeLines = buildTradePriceLines(nextSnapshot, visualSettings);
+    const activeKeys = new Set(tradeLines.map((line) => line.key));
+
+    for (const [key, record] of tradePriceLinesRef.current.entries()) {
+      if (!activeKeys.has(key)) {
+        removeTradePriceLine(priceSeries, key, record);
+      }
+    }
+
+    for (const { key, options } of tradeLines) {
+      const existingRecord = tradePriceLinesRef.current.get(key);
+      if (existingRecord) {
+        existingRecord.options = options;
+        existingRecord.line.applyOptions(optionsForTradeLine(key, options));
+      } else {
+        tradePriceLinesRef.current.set(key, {
+          line: priceSeries.createPriceLine(optionsForTradeLine(key, options)),
+          options
+        });
+      }
+    }
+  }
+
+  function clearTradePriceLines() {
+    const priceSeries = chartsRef.current?.series.priceSeries;
+    if (!priceSeries || !tradePriceLinesRef.current.size) {
+      tradePriceLinesRef.current.clear();
+      return;
+    }
+
+    for (const [key, record] of tradePriceLinesRef.current.entries()) {
+      removeTradePriceLine(priceSeries, key, record);
+    }
+  }
+
+  function removeTradePriceLine(priceSeries, key, record) {
+    try {
+      priceSeries.removePriceLine(record.line);
+    } catch {
+      // Chart teardown can invalidate line handles. The next chart instance
+      // starts with a clean set, so stale handles can be discarded.
+    }
+
+    if (focusedTradeLineKeyRef.current === key) {
+      focusedTradeLineKeyRef.current = null;
+    }
+
+    tradePriceLinesRef.current.delete(key);
+  }
+
+  function optionsForTradeLine(key, options) {
+    return focusedTradeLineKeyRef.current === key ? focusedTradeLineOptions(options) : options;
+  }
+
+  function focusTradeEntryLine(request) {
+    const key = tradeEntryLineKey(request);
+    if (!key) {
+      return;
+    }
+
+    const record = tradePriceLinesRef.current.get(key);
+    if (!record) {
+      return;
+    }
+
+    clearFocusedTradeLine();
+    focusedTradeLineKeyRef.current = key;
+    record.line.applyOptions(focusedTradeLineOptions(record.options));
+
+    focusTimeoutRef.current = window.setTimeout(() => {
+      const currentRecord = tradePriceLinesRef.current.get(key);
+      if (currentRecord) {
+        currentRecord.line.applyOptions(currentRecord.options);
+      }
+
+      if (focusedTradeLineKeyRef.current === key) {
+        focusedTradeLineKeyRef.current = null;
+      }
+
+      focusTimeoutRef.current = null;
+    }, 1800);
+  }
+
+  function clearFocusedTradeLine() {
+    if (focusTimeoutRef.current !== null) {
+      window.clearTimeout(focusTimeoutRef.current);
+      focusTimeoutRef.current = null;
+    }
+
+    const key = focusedTradeLineKeyRef.current;
+    if (!key) {
+      return;
+    }
+
+    const record = tradePriceLinesRef.current.get(key);
+    if (record) {
+      record.line.applyOptions(record.options);
+    }
+
+    focusedTradeLineKeyRef.current = null;
+  }
+
   function beginRangeSync() {
     // Guard programmatic range copies. Calling setVisibleLogicalRange on the
     // other charts emits their own range-change events; this guard prevents an
@@ -1104,6 +1245,292 @@ function syncSeriesOptions() {
     crosshairMarkerVisible: false,
     priceFormat: PRICE_FORMAT
   };
+}
+
+function applyPriceFormatting(chartsState, snapshot) {
+  const digits = quoteDigits(snapshot);
+  const priceFormat = priceFormatForDigits(digits);
+  const priceFormatter = (price) => formatPrice(price, digits);
+  const priceChart = chartsState.entries.find((entry) => entry.name === 'price')?.chart;
+
+  priceChart?.applyOptions({
+    localization: {
+      priceFormatter
+    }
+  });
+
+  for (const series of [
+    chartsState.series.priceSeries,
+    chartsState.series.smaFastSeries,
+    chartsState.series.smaMidSeries,
+    chartsState.series.smaSlowSeries,
+    chartsState.series.resistanceSeries,
+    chartsState.series.supportSeries,
+    chartsState.series.resistanceUpperBufferSeries,
+    chartsState.series.resistanceLowerBufferSeries,
+    chartsState.series.supportUpperBufferSeries,
+    chartsState.series.supportLowerBufferSeries
+  ]) {
+    series.applyOptions({ priceFormat });
+  }
+}
+
+function priceFormatForDigits(digits) {
+  return {
+    type: 'price',
+    precision: digits,
+    minMove: 10 ** -digits
+  };
+}
+
+function quoteDigits(snapshot) {
+  const digits = Number(snapshot?.quote?.digits);
+  return Number.isInteger(digits) && digits >= 0 && digits <= 8 ? digits : PRICE_FORMAT.precision;
+}
+
+function formatPrice(value, digits) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(digits) : '--';
+}
+
+function buildTradePriceLines(snapshot, visualSettings = {}) {
+  const currentSymbol = String(snapshot?.quote?.symbol || snapshot?.symbol || '').toUpperCase();
+  const accountCurrency = snapshot?.account?.currency ? String(snapshot.account.currency) : '';
+  const digits = quoteDigits(snapshot);
+  const filter = visualSettings.filter || 'current';
+  const positions = visualSettings.showPositions === false ? [] : filterBySymbol(snapshot?.positions, currentSymbol, filter);
+  const orders = visualSettings.showPendingOrders === false ? [] : filterBySymbol(snapshot?.orders, currentSymbol, filter);
+  const showStopLoss = visualSettings.showStopLoss !== false;
+  const showTakeProfit = visualSettings.showTakeProfit !== false;
+  const showPnlLabels = visualSettings.showPnlLabels !== false;
+  const lines = [];
+
+  for (const position of positions) {
+    const ticket = formatTicket(position.ticket);
+    const type = String(position.type || '').toUpperCase();
+    const volume = formatVolume(position.volume);
+    const entryPrice = positiveNumber(position.openPrice, digits);
+    const sl = positiveNumber(position.sl, digits);
+    const tp = positiveNumber(position.tp, digits);
+    const isBuy = type === 'BUY';
+    const entryColor = isBuy ? INDICATOR_COLORS.positionBuy : INDICATOR_COLORS.positionSell;
+    const pnlColor = pnlColorForValue(position.profit);
+    const pnl = showPnlLabels ? ` ${formatSignedMoney(position.profit, accountCurrency)}` : '';
+
+    if (entryPrice) {
+      lines.push({
+        key: `position:${ticket}:entry`,
+        options: tradeLineOptions({
+          price: entryPrice,
+          color: entryColor,
+          title: `${type} ${volume} #${ticket}${pnl}`,
+          axisLabelColor: showPnlLabels ? pnlColor : entryColor,
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid
+        })
+      });
+    }
+
+    if (showStopLoss && sl) {
+      lines.push({
+        key: `position:${ticket}:sl`,
+        options: tradeLineOptions({
+          price: sl,
+          color: INDICATOR_COLORS.tradeStopLoss,
+          title: `SL #${ticket}`,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed
+        })
+      });
+    }
+
+    if (showTakeProfit && tp) {
+      lines.push({
+        key: `position:${ticket}:tp`,
+        options: tradeLineOptions({
+          price: tp,
+          color: INDICATOR_COLORS.tradeTakeProfit,
+          title: `TP #${ticket}`,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed
+        })
+      });
+    }
+  }
+
+  for (const order of orders) {
+    const ticket = formatTicket(order.ticket);
+    const type = String(order.type || '').toUpperCase();
+    const volume = formatVolume(order.volumeCurrent ?? order.volumeInitial);
+    const entryPrice = positiveNumber(order.openPrice, digits);
+    const sl = positiveNumber(order.sl, digits);
+    const tp = positiveNumber(order.tp, digits);
+
+    if (entryPrice) {
+      lines.push({
+        key: `order:${ticket}:entry`,
+        options: tradeLineOptions({
+          price: entryPrice,
+          color: INDICATOR_COLORS.pendingOrder,
+          title: `${formatOrderType(type)} ${volume} #${ticket}`,
+          lineWidth: 2,
+          lineStyle: LineStyle.LargeDashed
+        })
+      });
+    }
+
+    if (showStopLoss && sl) {
+      lines.push({
+        key: `order:${ticket}:sl`,
+        options: tradeLineOptions({
+          price: sl,
+          color: INDICATOR_COLORS.tradeStopLoss,
+          title: `SL #${ticket}`,
+          lineWidth: 1,
+          lineStyle: LineStyle.SparseDotted
+        })
+      });
+    }
+
+    if (showTakeProfit && tp) {
+      lines.push({
+        key: `order:${ticket}:tp`,
+        options: tradeLineOptions({
+          price: tp,
+          color: INDICATOR_COLORS.tradeTakeProfit,
+          title: `TP #${ticket}`,
+          lineWidth: 1,
+          lineStyle: LineStyle.SparseDotted
+        })
+      });
+    }
+  }
+
+  return lines;
+}
+
+function filterBySymbol(items, currentSymbol, symbolFilter) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  if (symbolFilter !== 'all' && currentSymbol) {
+    return items.filter((item) => String(item?.symbol || '').toUpperCase() === currentSymbol);
+  }
+
+  return items;
+}
+
+function tradeLineOptions({ price, color, title, lineWidth, lineStyle, axisLabelColor = color }) {
+  return {
+    price,
+    color,
+    lineWidth,
+    lineStyle,
+    lineVisible: true,
+    axisLabelVisible: true,
+    title,
+    axisLabelColor,
+    axisLabelTextColor: '#0b1118'
+  };
+}
+
+function focusedTradeLineOptions(options) {
+  return {
+    ...options,
+    color: '#fbbf24',
+    lineWidth: Math.min(4, Math.max(3, Number(options.lineWidth || 1) + 1)),
+    lineStyle: LineStyle.Solid,
+    axisLabelColor: '#fbbf24',
+    axisLabelTextColor: '#0b1118'
+  };
+}
+
+function tradeEntryLineKey(request) {
+  const ticket = formatTicket(request?.ticket);
+  if (!ticket || ticket === '--') {
+    return null;
+  }
+
+  if (request?.kind === 'position') {
+    return `position:${ticket}:entry`;
+  }
+
+  if (request?.kind === 'order') {
+    return `order:${ticket}:entry`;
+  }
+
+  return null;
+}
+
+function positiveNumber(value, digits = PRICE_FORMAT.precision) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+
+  return Number(numeric.toFixed(digits));
+}
+
+function formatTicket(value) {
+  const text = String(value ?? '').trim();
+  return text || '--';
+}
+
+function formatVolume(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return '--';
+  }
+
+  return numeric.toFixed(2);
+}
+
+function formatSignedMoney(value, currency) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return '--';
+  }
+
+  const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : '';
+  const symbol = currencySymbol(currency);
+  if (symbol) {
+    return `${sign}${symbol}${Math.abs(numeric).toFixed(2)}`;
+  }
+
+  const suffix = currency ? ` ${currency}` : '';
+  return `${sign}${numeric.toFixed(2)}${suffix}`;
+}
+
+function currencySymbol(currency) {
+  const code = String(currency || '').toUpperCase();
+  return {
+    USD: '$',
+    EUR: 'EUR ',
+    GBP: 'GBP ',
+    JPY: 'JPY ',
+    CHF: 'CHF ',
+    AUD: 'A$',
+    CAD: 'C$',
+    NZD: 'NZ$'
+  }[code] || '';
+}
+
+function pnlColorForValue(value) {
+  const numeric = Number(value);
+  if (numeric > 0) {
+    return PNL_COLORS.positive;
+  }
+
+  if (numeric < 0) {
+    return PNL_COLORS.negative;
+  }
+
+  return PNL_COLORS.flat;
+}
+
+function formatOrderType(value) {
+  return String(value || '').replaceAll('_', ' ') || 'ORDER';
 }
 
 function showCrosshairOverlay(entry, coordinate) {

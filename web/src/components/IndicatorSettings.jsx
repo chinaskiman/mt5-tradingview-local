@@ -22,8 +22,10 @@ export default function IndicatorSettings({
   snapshot,
   chartSpacing,
   visible,
+  chartTradeVisuals,
   onChartSpacingChange,
-  onVisibilityChange
+  onVisibilityChange,
+  onChartTradeVisualsChange
 }) {
   const settings = snapshot?.settings || {};
 
@@ -68,6 +70,11 @@ export default function IndicatorSettings({
         </div>
       </section>
 
+      <ChartTradeVisuals
+        settings={chartTradeVisuals}
+        onChange={onChartTradeVisualsChange}
+      />
+
       <section className="frontend-prefs" aria-label="Frontend preferences">
         <h3>Display</h3>
         <label className="range-row">
@@ -95,6 +102,92 @@ export default function IndicatorSettings({
         <dd>{formatUnixTime(snapshot?.lastClosedTime)}</dd>
       </dl>
     </section>
+  );
+}
+
+function ChartTradeVisuals({ settings = {}, onChange }) {
+  const prefs = {
+    showPositions: settings.showPositions !== false,
+    showPendingOrders: settings.showPendingOrders !== false,
+    showStopLoss: settings.showStopLoss !== false,
+    showTakeProfit: settings.showTakeProfit !== false,
+    showPnlLabels: settings.showPnlLabels !== false,
+    filter: ['current', 'all'].includes(settings.filter) ? settings.filter : 'current'
+  };
+
+  const update = (key, value) => {
+    onChange?.({
+      ...prefs,
+      [key]: value
+    });
+  };
+
+  return (
+    <section className="indicator-group" aria-label="Chart trade visuals">
+      <h3>Chart Trade Visuals</h3>
+      <div className="indicator-list">
+        <TradeVisualToggle
+          label="Show position lines"
+          checked={prefs.showPositions}
+          onChange={(checked) => update('showPositions', checked)}
+        />
+        <TradeVisualToggle
+          label="Show pending order lines"
+          checked={prefs.showPendingOrders}
+          onChange={(checked) => update('showPendingOrders', checked)}
+        />
+        <TradeVisualToggle
+          label="Show SL lines"
+          checked={prefs.showStopLoss}
+          onChange={(checked) => update('showStopLoss', checked)}
+        />
+        <TradeVisualToggle
+          label="Show TP lines"
+          checked={prefs.showTakeProfit}
+          onChange={(checked) => update('showTakeProfit', checked)}
+        />
+        <TradeVisualToggle
+          label="Show PnL labels"
+          checked={prefs.showPnlLabels}
+          onChange={(checked) => update('showPnlLabels', checked)}
+        />
+      </div>
+      <div className="visual-filter-control" aria-label="Chart trade visual symbol filter">
+        <span>Filter</span>
+        <div className="preset-control">
+          {[
+            ['current', 'Current symbol only'],
+            ['all', 'All symbols']
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={`preset-button ${prefs.filter === key ? 'is-active' : ''}`}
+              onClick={() => update('filter', key)}
+              aria-pressed={prefs.filter === key}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TradeVisualToggle({ label, checked, onChange }) {
+  return (
+    <label className="indicator-row">
+      <span className={`indicator-state ${checked ? 'enabled' : 'disabled'}`} />
+      <span className="indicator-name">{label}</span>
+      <span className="indicator-meta">{checked ? 'On' : 'Off'}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        aria-label={label}
+      />
+    </label>
   );
 }
 

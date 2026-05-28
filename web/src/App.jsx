@@ -21,6 +21,14 @@ const DEFAULT_PREFS = {
   sidePanelActive: 'monitor',
   sidePanelWidth: DEFAULT_SIDE_PANEL_WIDTH,
   tradingMonitorFilter: 'current',
+  chartTradeVisuals: {
+    showPositions: true,
+    showPendingOrders: true,
+    showStopLoss: true,
+    showTakeProfit: true,
+    showPnlLabels: true,
+    filter: 'current'
+  },
   riskCalculator: {
     riskBasis: 'equity',
     riskMode: 'percent',
@@ -101,6 +109,7 @@ export default function App() {
     error: null
   });
   const [uiPrefs, setUiPrefs] = useState(() => loadPreferences());
+  const [chartFocusRequest, setChartFocusRequest] = useState(null);
 
   useEffect(() => {
     const socket = createDashboardSocket({
@@ -452,6 +461,40 @@ export default function App() {
     }
   }
 
+  function focusTradeOnChart(request) {
+    const currentSymbol = String(snapshot?.quote?.symbol || snapshot?.symbol || '').toUpperCase();
+    const requestSymbol = String(request?.symbol || '').toUpperCase();
+
+    setUiPrefs((current) => {
+      const nextVisuals = {
+        ...DEFAULT_PREFS.chartTradeVisuals,
+        ...current.chartTradeVisuals
+      };
+
+      if (request?.kind === 'position') {
+        nextVisuals.showPositions = true;
+      }
+
+      if (request?.kind === 'order') {
+        nextVisuals.showPendingOrders = true;
+      }
+
+      if (currentSymbol && requestSymbol && currentSymbol !== requestSymbol) {
+        nextVisuals.filter = 'all';
+      }
+
+      return {
+        ...current,
+        chartTradeVisuals: nextVisuals
+      };
+    });
+
+    setChartFocusRequest({
+      ...request,
+      id: Date.now()
+    });
+  }
+
   return (
     <main className="app-shell">
       <StatusBar
@@ -488,6 +531,8 @@ export default function App() {
           onLayoutPresetChange={updateLayoutPreset}
           onPanelHeightsChange={updatePanelHeights}
           onTogglePanelCollapsed={togglePanelCollapsed}
+          chartTradeVisuals={uiPrefs.chartTradeVisuals}
+          chartFocusRequest={chartFocusRequest}
         />
         <SidePanel
           open={uiPrefs.sidePanelOpen}
@@ -508,6 +553,7 @@ export default function App() {
               onFilterChange={(value) => updatePreference('tradingMonitorFilter', value)}
               tradeManagement={tradeManagement}
               onSendTradeManagement={requestTradeManagement}
+              onFocusTrade={focusTradeOnChart}
             />
           ) : null}
           {uiPrefs.sidePanelActive === 'indicators' ? (
@@ -515,8 +561,10 @@ export default function App() {
               snapshot={snapshot}
               chartSpacing={uiPrefs.chartSpacing}
               visible={uiPrefs.visible}
+              chartTradeVisuals={uiPrefs.chartTradeVisuals}
               onChartSpacingChange={(value) => updatePreference('chartSpacing', value)}
               onVisibilityChange={updateVisibility}
+              onChartTradeVisualsChange={(value) => updatePreference('chartTradeVisuals', value)}
             />
           ) : null}
           {uiPrefs.sidePanelActive === 'risk' ? (
@@ -556,6 +604,7 @@ function loadPreferences() {
       sidePanelActive: normalizeSidePanelActive(parsed?.sidePanelActive),
       sidePanelWidth: clamp(Number(parsed?.sidePanelWidth), MIN_SIDE_PANEL_WIDTH, MAX_SIDE_PANEL_WIDTH, DEFAULT_SIDE_PANEL_WIDTH),
       tradingMonitorFilter: normalizeTradingMonitorFilter(parsed?.tradingMonitorFilter),
+      chartTradeVisuals: normalizeChartTradeVisualsPrefs(parsed?.chartTradeVisuals, parsed?.tradeVisualFilter),
       riskCalculator: normalizeRiskCalculatorPrefs(parsed?.riskCalculator),
       orderEntry: normalizeOrderEntryPrefs(parsed?.orderEntry),
       autoScroll: parsed?.autoScroll !== false,
@@ -581,7 +630,24 @@ function normalizeLayoutPreset(value) {
 }
 
 function normalizeTradingMonitorFilter(value) {
-  return ['current', 'all'].includes(value) ? value : DEFAULT_PREFS.tradingMonitorFilter;
+  return normalizeSymbolFilter(value, DEFAULT_PREFS.tradingMonitorFilter);
+}
+
+function normalizeSymbolFilter(value, fallback) {
+  return ['current', 'all'].includes(value) ? value : fallback;
+}
+
+function normalizeChartTradeVisualsPrefs(value, legacyFilter) {
+  const defaults = DEFAULT_PREFS.chartTradeVisuals;
+
+  return {
+    showPositions: value?.showPositions !== false,
+    showPendingOrders: value?.showPendingOrders !== false,
+    showStopLoss: value?.showStopLoss !== false,
+    showTakeProfit: value?.showTakeProfit !== false,
+    showPnlLabels: value?.showPnlLabels !== false,
+    filter: normalizeSymbolFilter(value?.filter ?? legacyFilter, defaults.filter)
+  };
 }
 
 function normalizeSidePanelActive(value) {

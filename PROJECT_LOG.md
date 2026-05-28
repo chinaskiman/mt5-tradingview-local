@@ -624,3 +624,57 @@
 - Result: EA compiled with `0 errors, 0 warnings`. Backend syntax check passed. Web production build passed. Backend accepted the S/R payload and `/health` reported `hasSRSettings: true` and `hasSRData: true`. Static search confirmed S/R pattern and ATR buffer calculations are in MT5 and frontend uses stepped render series. Diff check had only expected CRLF warnings.
 - Known issues: Browser visual checks against live MT5 data still need to be run manually: S/R line visibility, persisted toggles, crosshair values, and existing chart/trading workflows.
 - Next steps: Restart backend/frontend, reattach the compiled EA in MT5, and run the updated README checklist with live EURUSD M15 data.
+
+## 2026-05-26 - Added frontend chart trade visuals
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/styles.css`, `web/src/utils/chartColors.js`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added frontend-only price chart lines for MT5 snapshot open positions and pending orders. Position overlays show entry, SL, and TP lines with compact labels containing symbol, side, volume, ticket, and floating PnL. Pending-order overlays show entry, SL, and TP lines with pending-order styling. Added a saved chart toolbar filter, `Trade lines: Current / All`, defaulting to current symbol only.
+- Why: The chart should visually show where active and pending trades sit relative to price without adding chart-based trading actions.
+- Decisions: Used Lightweight Charts `createPriceLine` / `removePriceLine` on the price series. Lines are rebuilt from the latest snapshot after clearing the previous set so stale/duplicate lines do not accumulate. This pass did not change MT5 EA, backend, order placement, risk calculator, or trade-management logic.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; static search for price-line lifecycle and accidental backend/MT5 trading changes; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. Price-line code is isolated to the frontend chart component. Diff check had only expected CRLF warnings.
+- Known issues: Visual confirmation with live MT5 positions and pending orders is still needed.
+- Next steps: Start backend/frontend with MT5 attached, open a demo position and pending order, then confirm entry/SL/TP lines update, filter correctly, and disappear after MT5 removes the trade/order.
+
+## 2026-05-26 - Added chart trade visual controls
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/components/IndicatorSettings.jsx`, `web/src/styles.css`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added an `Indicators` menu section named `Chart Trade Visuals` with saved frontend controls for position lines, pending order lines, SL lines, TP lines, PnL labels, and current-symbol/all-symbol filtering. Migrated the previous chart toolbar trade-line filter into this section while preserving legacy saved filter values.
+- Why: Trade visual display settings need to be accessible from the side panel without affecting the Trading Monitor table filter or adding chart trading actions.
+- Decisions: Settings are stored in `localStorage` as frontend preferences. This pass did not change MT5 EA, backend, risk calculator, order placement, or trade-management logic.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; static search for stale toolbar filter references.
+- Result: Web production build passed. Backend syntax check passed. Static search showed the controls now live in `IndicatorSettings`.
+- Known issues: Live browser verification with MT5 positions/orders is still needed to confirm each toggle hides/shows the expected price lines.
+- Next steps: Start backend/frontend, open `Indicators` -> `Chart Trade Visuals`, toggle each setting, refresh the browser, and confirm preferences persist.
+
+## 2026-05-28 - Hardened chart trade line readability and lifecycle
+
+- Files changed: `web/src/chart/TradingDashboard.jsx`, `README.md`, `PROJECT_LOG.md`
+- What changed: Trade price lines now use compact labels (`BUY 0.10 #ticket +$PnL`, `BUY LIMIT 0.10 #ticket`, `SL #ticket`, `TP #ticket`), quote digit-based price formatting, account-currency PnL formatting, and positive/negative PnL axis-label colors. Reworked the price-line lifecycle around stable keys so existing line handles are updated, stale lines are removed, and all line handles are cleaned on chart unmount.
+- Why: Trade overlays need to stay readable and reliable as MT5 snapshots update SL, TP, PnL, positions, and pending orders.
+- Decisions: BUY/SELL line colors remain distinct while PnL state is shown through the position entry axis label. No chart drag, close, modify, cancel, backend, or MT5 changes were added.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. Diff check had only expected CRLF warnings.
+- Known issues: Live browser verification with active MT5 positions/orders is still needed.
+- Next steps: Start backend/frontend with MT5 attached, then confirm entry/SL/TP lines update in place as PnL or stops change and disappear after positions/orders close.
+
+## 2026-05-28 - Added Trading Monitor focus-on-chart action
+
+- Files changed: `web/src/App.jsx`, `web/src/chart/TradingDashboard.jsx`, `web/src/components/TradingMonitor.jsx`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a `Focus on chart` action to Trading Monitor position and pending-order row menus. The action emits a frontend-only focus request that briefly highlights the matching price-chart entry line. If the selected row belongs to another symbol, the chart trade-visual filter switches to `All symbols` so the line can be shown.
+- Why: Trading Monitor rows and chart trade visuals should work together without requiring a trade command or MT5 modification.
+- Decisions: Focus only highlights the existing entry price line for a short timeout. It does not add chart close/modify/cancel controls, drag behavior, backend requests, or MT5 changes.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; static search for focus action wiring.
+- Result: Web production build passed. Backend syntax check passed. Focus action wiring is isolated to frontend state and chart price-line styling.
+- Known issues: Live browser verification with visible position/order lines is still needed.
+- Next steps: Start backend/frontend with MT5 positions/orders, click `Focus on chart` from both tables, and confirm the target entry line highlights briefly.
+
+## 2026-05-28 - Documented V3E chart trade visual test plan
+
+- Files changed: `README.md`, `PROJECT_LOG.md`
+- What changed: Renamed the chart trade visuals documentation to `V3E Chart Trade Visuals`, documented what position, pending order, SL, TP, PnL, filter, and focus visuals do, added a 20-step demo-account manual checklist, and added the known limitation that V3E is visual-only with no chart dragging or chart-based close/modify/cancel controls.
+- Why: V3E needs a clear manual verification path covering market positions, pending orders, toggles, line lifecycle, and regressions without expanding trading scope.
+- Tests/checks run: `npm run build` in `web`; `node --check server.js`; static search for V3E docs and no chart close/modify/cancel wording; `git diff --check`.
+- Result: Web production build passed. Backend syntax check passed. Static documentation search passed. Diff check had only expected CRLF warnings.
+- Known issues: The 20-step checklist still requires live MT5 demo-account execution; it was not executed by automation.
+- Next steps: Run the README V3E manual checklist on a demo account with live BUY/SELL positions and BUY LIMIT/SELL LIMIT pending orders.
