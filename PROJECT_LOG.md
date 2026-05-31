@@ -760,7 +760,7 @@
 - Files changed: `PROJECT_LOG.md`
 - What changed: Recorded the release preparation for `v0.1.0`, using the Windows installer generated at `release/MT5 TradingView Dashboard Setup 0.1.0.exe`.
 - Why: The GitHub repository needs a tagged release version for the installable Windows app.
-- Tests/checks run: Pending release creation.
-- Result: Pending.
+- Tests/checks run: Pushed commit `d9e6032`; created and pushed annotated tag `v0.1.0`; created GitHub release `MT5 TradingView Dashboard v0.1.0` through the GitHub REST API via SOCKS proxy; uploaded `MT5 TradingView Dashboard Setup 0.1.0.exe` as a release asset.
+- Result: Release created at `https://github.com/chinaskiman/mt5-tradingview-local/releases/tag/v0.1.0`. Installer asset uploaded successfully.
 - Known issues: The installer is unsigned. Live MT5/demo-account validation still remains manual.
-- Next steps: Commit this log entry, push `main`, tag `v0.1.0`, create the GitHub release, and upload the installer asset.
+- Next steps: Download the release asset on another Windows system, install it, copy/compile the packaged EA into MT5, and run the README Windows App Test Checklist with a demo account.
