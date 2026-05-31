@@ -754,3 +754,13 @@
 - Result: Standalone dev workflow passed. Electron dev backend auto-start passed. Windows installer build passed. Installed app backend auto-start passed. Installed app MT5 update endpoint smoke test passed. Installed app close stopped the backend. Installer output exists in `release/`.
 - Known issues: Live MT5 checks were not automated: real EA posting, chart/account/trading monitor/order entry/risk calculator/trade management, menu-click checks, localStorage preference persistence, and demo-account trading safety gates still need manual verification.
 - Next steps: Run the README Windows App Test Checklist with MT5 open on a demo account.
+
+## 2026-05-31 - Prepared v0.1.0 release
+
+- Files changed: `PROJECT_LOG.md`
+- What changed: Recorded the release preparation for `v0.1.0`, using the Windows installer generated at `release/MT5 TradingView Dashboard Setup 0.1.0.exe`.
+- Why: The GitHub repository needs a tagged release version for the installable Windows app.
+- Tests/checks run: Pending release creation.
+- Result: Pending.
+- Known issues: The installer is unsigned. Live MT5/demo-account validation still remains manual.
+- Next steps: Commit this log entry, push `main`, tag `v0.1.0`, create the GitHub release, and upload the installer asset.
