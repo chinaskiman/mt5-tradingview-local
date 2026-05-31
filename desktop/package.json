@@ -1,0 +1,65 @@
+{
+  "name": "mt5-tradingview-local-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell for the local MT5 TradingView dashboard.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron . --dev",
+    "start": "electron .",
+    "build:web": "cd ..\\web && npm run build",
+    "prepare:prod": "node scripts/prepare-production.js",
+    "build:desktop": "npm run prepare:prod",
+    "package:win": "npm run prepare:prod && electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.chinaskiman.mt5tradingviewlocal",
+    "productName": "MT5 TradingView Dashboard",
+    "icon": "assets/icon.ico",
+    "directories": {
+      "output": "../release"
+    },
+    "files": [
+      "main.js",
+      "package.json",
+      "assets/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web/dist"
+      },
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": [
+          "server.js",
+          "package.json",
+          "package-lock.json",
+          "node_modules/**"
+        ]
+      },
+      {
+        "from": "../mt5",
+        "to": "mt5",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "forceCodeSigning": false
+    },
+    "nsis": {
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  }
+}

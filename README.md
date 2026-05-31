@@ -43,6 +43,12 @@ React browser dashboard
   Vite app at http://127.0.0.1:5173
   Lightweight Charts renders price overlays plus ATR, ADX/DI, and RSI panels
 
+Electron desktop shell
+  desktop/main.js
+  loads Vite dev server in development
+  loads web/dist in production
+  can start or reuse the local backend at http://127.0.0.1:3001
+
 Risk calculator verification:
   React POST /risk/calculate -> backend queue
   MT5 GET /mt5/commands -> broker-normalized calculation
@@ -64,6 +70,10 @@ mt5-tradingview-local/
 |-- server/
 |   |-- package.json
 |   |-- server.js
+|   `-- README.md
+|-- desktop/
+|   |-- package.json
+|   |-- main.js
 |   `-- README.md
 |-- web/
 |   |-- package.json
@@ -101,6 +111,9 @@ cd server
 npm install
 
 cd ..\web
+npm install
+
+cd ..\desktop
 npm install
 ```
 
@@ -182,6 +195,156 @@ http://127.0.0.1:5173
 ```
 
 The page auto-reconnects if the backend is unavailable or the WebSocket disconnects.
+
+## Run the Desktop App
+
+The Electron layer is optional and does not replace the existing server/web commands.
+
+From the project root, the desktop scripts are:
+
+```powershell
+npm run dev:desktop
+npm run build:web
+npm run build:desktop
+npm run dist:windows
+```
+
+Development mode loads the Vite dev server:
+
+```powershell
+cd web
+npm run dev
+
+cd ..\desktop
+npm run dev
+```
+
+Production mode loads the built frontend from `web/dist`:
+
+```powershell
+cd web
+npm run build
+
+cd ..\desktop
+npm start
+```
+
+The desktop window title is `MT5 TradingView Dashboard`, starts around `1500x900`, and can be resized or maximized normally.
+
+The desktop app menu contains `Reload`, `Toggle DevTools`, `Open Logs Folder`, `Open MT5 EA Folder`, `Installation Help`, and `Quit`. `Installation Help` shows the basic MT5 WebRequest, EA attach, backend, and safety-gate instructions inside the app.
+
+Backend behavior:
+
+- If `http://127.0.0.1:3001/health` is already running, Electron reuses that backend.
+- If port `3001` is free, Electron starts the existing `server/server.js` as a managed child process.
+- When the Electron app closes, it stops the backend process it started.
+- If another non-dashboard process owns port `3001`, Electron shows a clear error instead of starting a duplicate backend.
+- Desktop logs are written to `%APPDATA%\mt5-tradingview-local-desktop\logs\desktop.log`.
+- Backend stdout/stderr is written to `%APPDATA%\mt5-tradingview-local-desktop\logs\backend.log`.
+- To disable desktop backend autostart, run `$env:DESKTOP_START_BACKEND='false'` before `npm start`.
+
+To create a Windows package:
+
+```powershell
+npm run dist:windows
+```
+
+The package output is written to `release/`. The packaged app includes:
+
+- the built frontend from `web/dist`
+- the backend files needed by Electron from `server/`
+- the `mt5/` folder so the EA source is available to the user
+
+The Windows build skips executable signing/resource editing with `win.signAndEditExecutable=false` and `win.forceCodeSigning=false`. This avoids electron-builder's `winCodeSign` extraction path, which can fail on Windows accounts without symlink privileges. The NSIS installer still uses the project icon from `desktop/assets/icon.ico`.
+
+Install dependencies in `server`, `web`, and `desktop` before packaging.
+
+## Install the Windows App
+
+After `npm run dist:windows` finishes, run:
+
+```text
+release\MT5 TradingView Dashboard Setup 0.1.0.exe
+```
+
+The installer is a per-user Windows installer. By default it installs under:
+
+```text
+%LOCALAPPDATA%\Programs\mt5-tradingview-local-desktop\
+```
+
+Launch:
+
+```text
+%LOCALAPPDATA%\Programs\mt5-tradingview-local-desktop\MT5 TradingView Dashboard.exe
+```
+
+The installed app starts the local backend automatically on:
+
+```text
+http://127.0.0.1:3001
+ws://127.0.0.1:3001
+```
+
+If the app is closed normally, the backend process it started is stopped.
+
+## Installed App Logs
+
+Use `App > Open Logs Folder` from the desktop menu, or open:
+
+```text
+%APPDATA%\MT5 TradingView Dashboard\logs\
+```
+
+Files:
+
+- `desktop.log`: Electron startup, frontend loading, and backend lifecycle messages.
+- `backend.log`: backend stdout/stderr, including MT5 update logs and WebSocket connection logs.
+
+## Connect MT5 to the Installed App
+
+The installed app still uses the same local backend URL:
+
+```text
+http://127.0.0.1:3001
+```
+
+In MT5:
+
+1. Open `Tools > Options > Expert Advisors`.
+2. Enable `Allow WebRequest for listed URL`.
+3. Add `http://127.0.0.1:3001`.
+4. Compile or copy the EA from the packaged resources:
+
+```text
+%LOCALAPPDATA%\Programs\mt5-tradingview-local-desktop\resources\mt5\MT5_Dashboard_Bridge.mq5
+```
+
+5. Attach `MT5_Dashboard_Bridge.mq5` to the MT5 chart you want mirrored.
+
+Known limitation: MT5 must still be installed, open, logged in, and running the EA on the chart. The desktop app does not replace MT5 and does not attach the EA automatically.
+
+## Windows App Test Checklist
+
+Automated smoke checks that were run:
+
+- Existing standalone `server/npm start` and `web/npm run dev` workflow starts and serves local endpoints.
+- Electron dev mode starts the local backend automatically when Vite is running.
+- `npm run dist:windows` builds `release\MT5 TradingView Dashboard Setup 0.1.0.exe`.
+- The installer installs the app under `%LOCALAPPDATA%\Programs\mt5-tradingview-local-desktop`.
+- The installed app starts the backend automatically.
+- `POST http://127.0.0.1:3001/mt5/update` accepts an MT5-shaped snapshot through the installed app backend.
+- The packaged EA source exists under `resources\mt5`.
+- The desktop/backend log folder is created.
+- Closing the installed app stops the backend process it started.
+
+Manual checks that still require live MT5 and a demo account:
+
+- Confirm real MT5 EA posts chart data to the installed app.
+- Confirm chart, account, Trading Monitor, Order Entry, Risk Calculator, and Trade Management work with live MT5 snapshots.
+- Confirm settings persist after app restart by changing a browser preference, closing the app, and reopening it.
+- Confirm `App > Open Logs Folder`, `App > Open MT5 EA Folder`, and `App > Installation Help` from the desktop menu.
+- Confirm trading safety gates: frontend Trading Mode is OFF by default per session; backend order commands remain disabled unless configured; backend trade management remains disabled unless configured; EA order placement and trade management remain disabled unless explicitly enabled.
 
 ## Attach the EA
 

@@ -678,3 +678,79 @@
 - Result: Web production build passed. Backend syntax check passed. Static documentation search passed. Diff check had only expected CRLF warnings.
 - Known issues: The 20-step checklist still requires live MT5 demo-account execution; it was not executed by automation.
 - Next steps: Run the README V3E manual checklist on a demo account with live BUY/SELL positions and BUY LIMIT/SELL LIMIT pending orders.
+
+## 2026-05-31 - Added Electron desktop shell
+
+- Files changed: `desktop/package.json`, `desktop/package-lock.json`, `desktop/main.js`, `desktop/README.md`, `web/vite.config.js`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a new Electron desktop package with a main process that opens `MT5 TradingView Dashboard` in a resizable `1500x900` window, hides the default menu, loads the Vite dev server in development, and loads `web/dist/index.html` in production. The desktop shell checks the local backend health endpoint, reuses an already-running backend, or starts the existing `server/server.js` as a managed child process when port `3001` is free. Added Electron setup, run, and Windows packaging documentation.
+- Why: Provide a Windows desktop app layer without breaking the existing separate backend and Vite frontend development workflow.
+- Decisions: Kept MT5 EA trading logic, backend API behavior, and frontend features unchanged. Set Vite `base: './'` so built frontend assets load correctly from Electron `file://` production mode. Desktop backend autostart can be disabled with `DESKTOP_START_BACKEND=false`.
+- Tests/checks run: `node --check desktop/main.js`; parsed `desktop/package.json`, `server/package.json`, and `web/package.json`; `npm run build` in `web`; `node --check server/server.js`; inspected `web/dist/index.html` asset paths.
+- Result: Desktop main syntax check passed. Package JSON parsing passed. Web production build passed and emitted relative asset paths. Backend syntax check passed.
+- Known issues: Electron dependencies were not fully installed in this pass, so `npm run dev`, `npm start`, and `npm run package:win` from `desktop/` still need a local `npm install` before runtime/package testing.
+- Next steps: Run `npm install` in `desktop` through the configured proxy if needed, then test `npm run dev` with Vite running and `npm start` after `web` has been built.
+
+## 2026-05-31 - Managed desktop backend process
+
+- Files changed: `desktop/main.js`, `desktop/README.md`, `README.md`, `PROJECT_LOG.md`
+- What changed: Reworked Electron backend startup from in-process import to a managed Electron utility process. The desktop shell now starts `server/server.js` automatically when port `3001` is free, reuses an already-running dashboard backend, shows a clear error when a non-dashboard process owns port `3001`, logs backend stdout/stderr to the Electron user-data log folder, and stops the backend process it started when the app quits.
+- Why: The desktop app needs to own the backend lifecycle cleanly without changing backend routes, trading command gates, or standalone server scripts.
+- Decisions: Existing `server/npm start` and `server/npm run dev` remain unchanged. If a backend was already running before Electron starts, Electron does not terminate it on exit.
+- Tests/checks run: `node --check desktop/main.js`; parsed `desktop/package.json`; `node --check server/server.js`; `npm run build` in `web`; attempted proxied `npm install` in `desktop`; ran proxied `npm install --package-lock-only --ignore-scripts` in `desktop`; parsed `desktop/package-lock.json`; removed the partial generated `desktop/node_modules` left by the timed-out install.
+- Result: Desktop main syntax check passed. Desktop package JSON parse passed. Backend syntax check passed. Web production build passed. Full desktop install timed out before a usable install completed; package-lock-only install succeeded and produced `desktop/package-lock.json`. NPM reported 10 high-severity audit findings in desktop dependencies, which were not changed in this pass.
+- Known issues: Electron dependencies still need a full local installation before runtime testing.
+- Next steps: Install desktop dependencies, then test `npm run dev` with Vite running and `npm start` after `web` has been built.
+
+## 2026-05-31 - Added Windows desktop build scripts
+
+- Files changed: `package.json`, `.gitignore`, `desktop/package.json`, `desktop/scripts/prepare-production.js`, `desktop/README.md`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added root scripts `dev:desktop`, `build:web`, `build:desktop`, and `dist:windows`. Updated the Electron builder config to output installers to `release/`, include `web/dist`, include the backend files and installed backend dependencies needed by Electron, and include the `mt5/` folder for user access to the EA source. Added a desktop production-prep script that checks required build inputs before packaging.
+- Why: The project needs a root-level workflow for building an installable Windows app while keeping `server` and `web` package scripts working.
+- Decisions: Electron dependencies remain scoped to `desktop/`; the root package is an orchestration package only. No backend routes, MT5 trading logic, frontend features, or trading safety gates were changed.
+- Tests/checks run: Parsed `package.json`, `desktop/package.json`, and `desktop/package-lock.json`; `node --check desktop/scripts/prepare-production.js`; `node --check desktop/main.js`; `node --check server/server.js`; `npm run build:desktop`; attempted proxied `npm install --package-lock-only --ignore-scripts` in `desktop`.
+- Result: Root `build:desktop` succeeded: it built `web/dist` and the desktop production-prep script confirmed required web, backend entry/package, installed backend `express`/`ws` dependencies, and MT5 EA source exist. The package-lock-only refresh attempt failed with npm `Invalid Version` from npm's dependency tree builder, but package dependencies did not change and the existing lockfile still parses.
+- Known issues: Electron dependencies still need a full local installation before runtime installer testing. `npm run dist:windows` was not run because Electron/electron-builder are not installed in `desktop/node_modules`.
+- Next steps: Run a clean `npm install` in `desktop`, then run `npm run dist:windows` from the project root to create the installer in `release/`.
+
+## 2026-05-31 - Added desktop app icon and cleaned build output
+
+- Files changed: `desktop/assets/icon.svg`, `desktop/assets/icon.ico`, `desktop/package.json`, `desktop/scripts/prepare-production.js`, `PROJECT_LOG.md`
+- What changed: Added a dark MT5 chart-themed app icon in SVG source form and generated a multi-size Windows `.ico`. Wired electron-builder to use `desktop/assets/icon.ico` for the app and Windows installer, included `assets/**` in packaged files, and added the icon to the production-prep validation checks.
+- Why: The installable Windows app needs a proper application icon before the next installer build.
+- Decisions: Removed generated `release/` output from the interrupted builder run, including the partial `win-unpacked` app. Kept installed desktop dependencies because they are needed for the user-run packaging command and are ignored by Git.
+- Tests/checks run: Stopped leftover interrupted `npm`/`electron-builder` Node processes; removed `release/`; generated `desktop/assets/icon.ico`; parsed `desktop/package.json`; `node --check desktop/scripts/prepare-production.js`; `node --check desktop/main.js`; `npm run build:desktop`; removed the empty `release/` directory created by the prep script.
+- Result: Icon files exist, package/config syntax checks passed, `build:desktop` passed, and no `release/` build output remains.
+- Known issues: The full installer was not built in this pass because the user asked to run the build command manually.
+- Next steps: Run the provided root `npm run dist:windows` command when ready; installer output will be created under `release/`.
+
+## 2026-05-31 - Disabled Windows code-sign extraction path
+
+- Files changed: `desktop/package.json`, `desktop/README.md`, `README.md`, `PROJECT_LOG.md`
+- What changed: Set Electron builder Windows config to `signAndEditExecutable=false` and `forceCodeSigning=false`, and set NSIS installer/uninstaller icons to `desktop/assets/icon.ico`.
+- Why: The installer build downloaded `winCodeSign` from GitHub successfully, but extraction failed on Windows because the archive contains macOS symlinks and the current account lacks symlink privilege. Skipping electron-builder's Windows signing/resource-edit step avoids that cache path.
+- Decisions: This keeps the app unsigned. The installer still uses the project icon. No backend routes, trading logic, or frontend behavior changed.
+- Tests/checks run: Parsed `desktop/package.json`; `node --check desktop/main.js`; `node --check desktop/scripts/prepare-production.js`; `npm run build:desktop`; removed the empty `release/` directory created by the prep script.
+- Result: Package/config syntax checks passed. `build:desktop` passed with the updated Windows builder config. No installer output remains in `release/`.
+- Known issues: If an embedded `.exe` icon is required later, build from an elevated shell or enable Windows Developer Mode so electron-builder can extract `winCodeSign`.
+- Next steps: Run `npm run build:desktop`, then run the proxy-safe `npm run dist:windows` command.
+
+## 2026-05-31 - Polished Electron desktop shell
+
+- Files changed: `desktop/main.js`, `desktop/README.md`, `README.md`, `PROJECT_LOG.md`
+- What changed: Added a normal Electron app menu with `Reload`, `Toggle DevTools`, `Open Logs Folder`, `Open MT5 EA Folder`, `Installation Help`, and `Quit`. Added desktop app logging to `userData/logs/desktop.log` alongside backend stdout/stderr in `userData/logs/backend.log`. Wired the window icon to `desktop/assets/icon.ico` when available and kept the app usable if the icon is missing. Added menu help text for MT5 WebRequest, EA attachment, backend startup, and safety gates.
+- Why: The Windows desktop app needs basic operator actions for diagnostics, help, and access to the packaged EA source without adding auto-update, login, or auth.
+- Decisions: LocalStorage behavior and WebSocket reconnect stay in the existing React app. The Electron shell does not change backend routes, frontend features, MT5 EA behavior, or trading safety gates.
+- Tests/checks run: `node --check desktop/main.js`; `node --check desktop/scripts/prepare-production.js`; `node --check server/server.js`; parsed root and desktop package JSON files; `npm run build:desktop`; removed the empty `release/` directory created by the prep script.
+- Result: Syntax checks passed. Package JSON checks passed. `build:desktop` passed and confirmed required production resources exist.
+- Known issues: Runtime menu checks still need to be done inside Electron after packaging or `npm run dev`.
+- Next steps: Run syntax checks and `npm run build:desktop`, then verify the menu actions in the desktop app.
+
+## 2026-05-31 - Tested and documented Windows installed app
+
+- Files changed: `README.md`, `desktop/README.md`, `PROJECT_LOG.md`
+- What changed: Added root documentation for Windows installer usage, installed app launch path, MT5 WebRequest setup for the installed app, packaged EA location, desktop/backend log paths, automated smoke-test results, remaining live MT5 checks, and trading safety-gate checks.
+- Why: The desktop installer needs clear operator instructions and a documented test checklist before regular use.
+- Tests/checks run: Started standalone backend with `server/npm start` and verified `/health`; started standalone frontend with `web/npm run dev` and verified `http://127.0.0.1:5173`; started Electron dev mode with Vite running and verified the backend auto-started on `127.0.0.1:3001`; built the Windows installer with proxied `npm run dist:windows`; silently installed `release/MT5 TradingView Dashboard Setup 0.1.0.exe`; launched the installed app; verified backend `/health`; posted an MT5-shaped snapshot to `/mt5/update`; verified packaged EA source exists under installed `resources/mt5`; verified `desktop.log` and `backend.log` are created under `%APPDATA%\MT5 TradingView Dashboard\logs`; closed the installed app and verified the backend stopped.
+- Result: Standalone dev workflow passed. Electron dev backend auto-start passed. Windows installer build passed. Installed app backend auto-start passed. Installed app MT5 update endpoint smoke test passed. Installed app close stopped the backend. Installer output exists in `release/`.
+- Known issues: Live MT5 checks were not automated: real EA posting, chart/account/trading monitor/order entry/risk calculator/trade management, menu-click checks, localStorage preference persistence, and demo-account trading safety gates still need manual verification.
+- Next steps: Run the README Windows App Test Checklist with MT5 open on a demo account.

@@ -1,0 +1,12 @@
+{
+  "name": "mt5-tradingview-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Windows MT5 TradingView-style dashboard.",
+  "scripts": {
+    "dev:desktop": "npm --prefix desktop run dev",
+    "build:web": "npm --prefix web run build",
+    "build:desktop": "npm run build:web && npm --prefix desktop run build:desktop",
+    "dist:windows": "npm run build:web && npm --prefix desktop run package:win"
+  }
+}
